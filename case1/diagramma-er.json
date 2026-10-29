@@ -1,0 +1,129 @@
+{
+  "version": 1,
+  "entities": [
+    {
+      "id": "e1",
+      "name": "alunno",
+      "x": 300,
+      "y": 220
+    },
+    {
+      "id": "e2",
+      "name": "classe",
+      "x": 660,
+      "y": 220
+    },
+    {
+      "id": "e3",
+      "name": "professore",
+      "x": 660,
+      "y": 460
+    }
+  ],
+  "associations": [
+    {
+      "id": "a1",
+      "name": "appartiene",
+      "x": 480,
+      "y": 220
+    },
+    {
+      "id": "a2",
+      "name": "insegnare",
+      "x": 660,
+      "y": 340
+    }
+  ],
+  "attributes": [
+    {
+      "id": "t1",
+      "owner": "e1",
+      "name": "id",
+      "pk": true,
+      "dx": -200,
+      "dy": -80
+    },
+    {
+      "id": "t2",
+      "owner": "e1",
+      "name": "nome",
+      "pk": false,
+      "dx": -220,
+      "dy": -60
+    },
+    {
+      "id": "t3",
+      "owner": "e1",
+      "name": "cognome",
+      "pk": false,
+      "dx": -240,
+      "dy": -40
+    },
+    {
+      "id": "t4",
+      "owner": "e2",
+      "name": "id",
+      "pk": true,
+      "dx": 120,
+      "dy": 0
+    },
+    {
+      "id": "t5",
+      "owner": "e2",
+      "name": "nome",
+      "pk": false,
+      "dx": 120,
+      "dy": 20
+    },
+    {
+      "id": "t6",
+      "owner": "e3",
+      "name": "id",
+      "pk": true,
+      "dx": 120,
+      "dy": 0
+    },
+    {
+      "id": "t7",
+      "owner": "e3",
+      "name": "materia",
+      "pk": false,
+      "dx": 120,
+      "dy": 20
+    },
+    {
+      "id": "t8",
+      "owner": "e3",
+      "name": "nome",
+      "pk": false,
+      "dx": 120,
+      "dy": 40
+    }
+  ],
+  "links": [
+    {
+      "id": "l1",
+      "entity": "e2",
+      "assoc": "a1",
+      "many": false
+    },
+    {
+      "id": "l2",
+      "entity": "e1",
+      "assoc": "a1",
+      "many": true
+    },
+    {
+      "id": "l3",
+      "entity": "e2",
+      "assoc": "a2",
+      "many": true
+    },
+    {
+      "id": "l4",
+      "entity": "e3",
+      "assoc": "a2",
+      "many": true
+    }
+  ]
+}

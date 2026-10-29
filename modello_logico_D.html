@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Generatore Modello Logico e SQL DDL</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+            background-color: #f0f2f5;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            background: #ffffff;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+        }
+        h1 {
+            color: #1e293b;
+            margin-top: 0;
+            border-bottom: 2px solid #e2e8f0;
+            padding-bottom: 12px;
+            font-size: 24px;
+        }
+        h2 {
+            color: #334155;
+            font-size: 18px;
+            margin-top: 25px;
+            margin-bottom: 15px;
+        }
+        #drop-zone {
+            border: 2px dashed #3b82f6;
+            border-radius: 8px;
+            padding: 40px 20px;
+            text-align: center;
+            background: #f8fafc;
+            color: #64748b;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            margin-bottom: 25px;
+            font-weight: 500;
+        }
+        #drop-zone.hover {
+            background-color: #eff6ff;
+            border-color: #2563eb;
+            color: #1d4ed8;
+        }
+        #file-input {
+            display: none;
+        }
+        .error-box {
+            color: #b91c1c;
+            background: #fef2f2;
+            padding: 12px;
+            border-left: 4px solid #ef4444;
+            margin-bottom: 20px;
+            border-radius: 6px;
+            display: none;
+            font-size: 14px;
+        }
+        .output-section {
+            display: none;
+        }
+        .btn {
+            background-color: #10b981;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            font-size: 14px;
+            font-weight: 600;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-bottom: 15px;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            transition: background 0.2s;
+        }
+        .btn:hover {
+            background-color: #059669;
+        }
+        .btn-blue {
+            background-color: #3b82f6;
+        }
+        .btn-blue:hover {
+            background-color: #2563eb;
+        }
+        .svg-wrapper {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 15px;
+            overflow-x: auto;
+            margin-bottom: 30px;
+        }
+        svg {
+            display: block;
+            background: #ffffff;
+            border: 1px solid #f1f5f9;
+            box-shadow: inset 0 0 10px rgba(0,0,0,0.01);
+        }
+        .sql-wrapper {
+            position: relative;
+        }
+        pre {
+            background: #0f172a;
+            color: #38bdf8;
+            padding: 20px;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-family: 'Fira Code', 'Courier New', Courier, monospace;
+            font-size: 14px;
+            line-height: 1.5;
+            margin: 0;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Generatore Modello Logico e SQL DDL</h1>
+    <p style="color: #64748b; margin-bottom: 20px;">Rilascia o seleziona il file JSON del diagramma ER per estrarre lo schema fisico SVG e lo script SQL definitivo.</p>
+    
+    <div id="drop-zone">
+        Trascina qui il file JSON o fai clic per cercarlo sul computer
+        <input type="file" id="file-input" accept=".json">
+    </div>
+
+    <div id="error-box" class="error-box"></div>
+
+    <div id="output-section" class="output-section">
+        <h2>1. Diagramma Relazionale Fisico (SVG)</h2>
+        <button id="btn-download" class="btn">💾 Scarica Diagramma SVG</button>
+        <div class="svg-wrapper">
+            <div id="svg-container"></div>
+        </div>
+
+        <h2>2. Codice SQL DDL</h2>
+        <button id="btn-copy" class="btn btn-blue">📋 Copia Codice SQL</button>
+        <div class="sql-wrapper">
+            <pre id="sql-output"></pre>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const dropZone = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('file-input');
+    const errorBox = document.getElementById('error-box');
+    const outputSection = document.getElementById('output-section');
+    const svgContainer = document.getElementById('svg-container');
+    const sqlOutput = document.getElementById('sql-output');
+    const btnDownload = document.getElementById('btn-download');
+    const btnCopy = document.getElementById('btn-copy');
+
+    let currentSvgString = "";
+
+    // Gestione Drag & Drop Nativo al 100% blindato
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, preventDefaults, false);
+        document.body.addEventListener(eventName, preventDefaults, false);
+    });
+
+    function preventDefaults(e) {
+        e.preventDefault();
+        e.stopPropagation();
+    }
+
+    ['dragenter', 'dragover'].forEach(eventName => {
+        dropZone.addEventListener(eventName, () => dropZone.classList.add('hover'), false);
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, () => dropZone.classList.remove('hover'), false);
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+        const dt = e.dataTransfer;
+        const files = dt.files;
+        if (files.length > 0) handleFile(files[0]);
+    });
+
+    dropZone.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', (e) => {
+        if (e.target.files.length > 0) handleFile(e.target.files[0]);
+    });
+
+    function handleFile(file) {
+        errorBox.style.display = 'none';
+        errorBox.textContent = '';
+        outputSection.style.display = 'none';
+
+        const reader = new FileReader();
+        reader.onload = function(evt) {
+            try {
+                const data = JSON.parse(evt.target.result);
+                processERData(data);
+            } catch (err) {
+                console.error(err);
+                showError("Errore critico nella lettura o nel parsing del file JSON: " + err.message);
+            }
+        };
+        reader.onerror = function() {
+            showError("Impossibile leggere il file selezionato.");
+        };
+        reader.readAsText(file);
+    }
+
+    function showError(msg) {
+        errorBox.textContent = msg;
+        errorBox.style.display = 'block';
+    }
+
+    // Algoritmo di traduzione logico-fisica sequenziale sicuro
+    function processERData(data) {
+        if (!data.entities || !Array.isArray(data.entities)) {
+            showError("Formato JSON non valido: campo 'entities' assente o errato.");
+            return;
+        }
+
+        // 1. Inizializziamo dizionari di supporto basati sugli ID del JSON
+        const entities = {};
+        const associations = {};
+        const tables = {};
+
+        data.entities.forEach(e => {
+            entities[e.id] = { name: e.name, pks: [], fields: [] };
+            tables[e.name] = { pks: [], fks: [], fields: [], assoc_fields: [] };
+        });
+
+        if (data.associations && Array.isArray(data.associations)) {
+            data.associations.forEach(a => {
+                associations[a.id] = { name: a.name, links: [], attributes: [] };
+            });
+        }
+
+        // 2. Smistamento sicuro degli attributi
+        if (data.attributes && Array.isArray(data.attributes)) {
+            data.attributes.forEach(attr => {
+                const owner = attr.owner;
+                if (entities[owner]) {
+                    if (attr.pk) {
+                        entities[owner].pks.push(attr.name);
+                        if (!tables[entities[owner].name].pks.includes(attr.name)) {
+                            tables[entities[owner].name].pks.push(attr.name);
+                        }
+                    } else {
+                        entities[owner].fields.push(attr.name);
+                        if (!tables[entities[owner].name].fields.includes(attr.name)) {
+                            tables[entities[owner].name].fields.push(attr.name);
+                        }
+                    }
+                } else if (associations[owner]) {
+                    associations[owner].attributes.push(attr.name);
+                }
+            });
+        }
+
+        // 3. Associazione dei link alle relazioni
+        if (data.links && Array.isArray(data.links)) {
+            data.links.forEach(l => {
+                if (associations[l.assoc]) {
+                    associations[l.assoc].links.push({
+                        entityId: l.entity,
+                        many: l.many === true || l.many === "true"
+                    });
+                }
+            });
+        }
+
+        // 4. Applicazione delle regole di derivazione ed ereditarietà degli attributi di relazione
+        Object.keys(associations).forEach(aId => {
+            const assoc = associations[aId];
+            if (assoc.links.length === 2) {
+                const l1 = assoc.links[0];
+                const l2 = assoc.links[1];
+                const ent1 = entities[l1.entityId];
+                const ent2 = entities[l2.entityId];
+
+                if (ent1 && ent2) {
+                    // Caso Relazione 1-N
+                    if (l1.many !== l2.many) {
+                        const manyLink = l1.many ? l1 : l2;
+                        const oneLink = l1.many ? l2 : l1;
+                        const manyEnt = entities[manyLink.entityId];
+                        const oneEnt = entities[oneLink.entityId];
+
+                        // La PK del lato 1 migra nel lato N come FK
+                        oneEnt.pks.forEach(pk => {
+                            const fkName = `${oneEnt.name}_id`;
+                            if (!tables[manyEnt.name].fks.includes(fkName)) {
+                                tables[manyEnt.name].fks.push(fkName);
+                            }
+                            if (!tables[manyEnt.name].fields.includes(fkName)) {
+                                tables[manyEnt.name].fields.push(fkName);
+                            }
+                        });
+
+                        // Gli attributi dell'associazione migrano nel lato N
+                        assoc.attributes.forEach(attrName => {
+                            if (!tables[manyEnt.name].assoc_fields.includes(attrName)) {
+                                tables[manyEnt.name].assoc_fields.push(attrName);
+                            }
+                            if (!tables[manyEnt.name].fields.includes(attrName)) {
+                                tables[manyEnt.name].fields.push(attrName);
+                            }
+                        });
+                    }
+                    // Caso Relazione N-N
+                    else if (l1.many && l2.many) {
+                        const bridgeName = `${ent1.name}_${ent2.name}`;
+                        if (!tables[bridgeName]) {
+                            tables[bridgeName] = { pks: [], fks: [], fields: [], assoc_fields: [] };
+                        }
+
+                        [ent1, ent2].forEach(ent => {
+                            ent.pks.forEach(pk => {
+                                const fkName = `${ent.name}_id`;
+                                if (!tables[bridgeName].pks.includes(fkName)) {
+                                    tables[bridgeName].pks.push(fkName);
+                                }
+                                if (!tables[bridgeName].fks.includes(fkName)) {
+                                    tables[bridgeName].fks.push(fkName);
+                                }
+                                if (!tables[bridgeName].fields.includes(fkName)) {
+                                    tables[bridgeName].fields.push(fkName);
+                                }
+                            });
+                        });
+
+                        // Gli attributi dell'associazione vanno nella tabella di giunzione
+                        assoc.attributes.forEach(attrName => {
+                            if (!tables[bridgeName].assoc_fields.includes(attrName)) {
+                                tables[bridgeName].assoc_fields.push(attrName);
+                            }
+                            if (!tables[bridgeName].fields.includes(attrName)) {
+                                tables[bridgeName].fields.push(attrName);
+                            }
+                        });
+                    }
+                }
+            }
+        });
+
+        // Rendering grafico e testuale coordinato
+        renderSQL(tables);
+        renderSVGDiagram(tables);
+        outputSection.style.display = 'block';
+    }
+
+    // Generazione dello Script SQL DDL coerente sotto
+    function renderSQL(tables) {
+        let sql = "";
+        
+        // Ordiniamo le tabelle in modo che quelle ponte vengano per ultime (evita problemi di FK non ancora create)
+        const tableNames = Object.keys(tables).sort((a, b) => {
+            const isABridge = a.includes('_');
+            const isBBridge = b.includes('_');
+            return isABridge - isBBridge;
+        });
+
+        tableNames.forEach(name => {
+            const t = tables[name];
+            sql += `CREATE TABLE ${name} (\n`;
+            
+            const columns = [];
+            
+            // 1. Colonne Chiavi Primarie Native o Composte
+            t.pks.forEach(pk => {
+                // Se è una tabella normale, la PK nativa è AUTO_INCREMENT. Nelle tabelle ponte o FK esterne NO.
+                const isForeignKey = t.fks.includes(pk);
+                if (isForeignKey) {
+                    columns.push(`    ${pk} INT NOT NULL`);
+                } else {
+                    columns.push(`    ${pk} INT NOT NULL AUTO_INCREMENT`);
+                }
+            });
+
+            // 2. Colonne Campi Standard
+            t.fields.forEach(f => {
+                if (!t.pks.includes(f) && !t.fks.includes(f) && !t.assoc_fields.includes(f)) {
+                    columns.push(`    ${f} VARCHAR(255) NOT NULL`);
+                }
+            });
+
+            // 3. Colonne Chiavi Esterne migrate (che non fanno parte della PK)
+            t.fks.forEach(fk => {
+                if (!t.pks.includes(fk)) {
+                    columns.push(`    ${fk} INT NOT NULL`);
+                }
+            });
+
+            // 4. Colonne Attributi delle associazioni
+            t.assoc_fields.forEach(af => {
+                columns.push(`    ${af} VARCHAR(255) NOT NULL`);
+            });
+
+            // 5. Definizione del vincolo PRIMARY KEY
+            if (t.pks.length > 0) {
+                columns.push(`    PRIMARY KEY (${t.pks.join(', ')})`);
+            }
+
+            // 6. Definizione dei vincoli FOREIGN KEY referenziati
+            t.fks.forEach(fk => {
+                const targetTable = fk.replace('_id', '');
+                columns.push(`    FOREIGN KEY (${fk}) REFERENCES ${targetTable}(id) ON DELETE CASCADE ON UPDATE CASCADE`);
+            });
+
+            sql += columns.join(',\n');
+            sql += `\n);\n\n`;
+        });
+
+        sqlOutput.textContent = sql.trim();
+    }
+    // Creazione del Diagramma Relazionale SVG.
+    // Layout con corsie dedicate: gaps larghi tra le colonne native e una x di corsia unica per ogni
+    // linea, così le linee non si sovrappongono tra loro né coprono i box. Le etichette vengono
+    // posizionate sul tratto verticale della corsia con uno sfondo bianco staccato dal contenuto.
+    function renderSVGDiagram(tables) {
+        svgContainer.innerHTML = "";
+
+        const cardWidth = 330;
+        const headerH = 42;
+        const rowH = 30;
+        const topY = 38;
+        const gap = 150;           // larghezza delle corsie tra colonne native (ampio per più linee)
+        const sideMargin = 60;     // margine esterno per le corsie periferiche
+
+        const nativeNames = [];
+        const bridgeNames = [];
+        Object.keys(tables).forEach(name => {
+            if (name.includes('_')) bridgeNames.push(name);
+            else nativeNames.push(name);
+        });
+
+        const rowsOf = function (t) {
+            const pkRows = t.pks;
+            const fkRows = t.fks.filter(fk => !t.pks.includes(fk));
+            const stdRows = t.fields.filter(f => !t.pks.includes(f) && !t.fks.includes(f) && !t.assoc_fields.includes(f));
+            return [].concat(pkRows, stdRows, fkRows, t.assoc_fields);
+        };
+        const htOf = function (t) { return headerH + rowsOf(t).length * rowH; };
+        const coordsTarget = fk => fk.replace(/_id$/, '');
+
+        const colIndex = {};
+        nativeNames.forEach((name, i) => { colIndex[name] = i; });
+
+        // Ordinamento topologico delle tabelle native in base alle dipendenze FK:
+        // una tabella referenziata (base) precede chi la referenzia. Le destinazioni delle tabelle
+        // ponte vengono poi poste agli estremi del layout (con l'ordine topologico preservato), così
+        // i loro lati esterni coincidono con i margini liberi e ogni linea ha una corsia pulita.
+        if (nativeNames.length > 1) {
+            // dipendenze: per ogni nativa, l'insieme di native che referenzia (via FK)
+            const deps = {};
+            nativeNames.forEach(n => deps[n] = new Set());
+            nativeNames.forEach(n => {
+                (tables[n].fks || []).forEach(fk => {
+                    const tgt = coordsTarget(fk);
+                    if (nativeNames.indexOf(tgt) !== -1) deps[n].add(tgt);
+                });
+            });
+
+            // Kahn: ordina topologicamente (base prima, referenziante dopo)
+            const ordered = [];
+            const placed = new Set();
+            while (ordered.length < nativeNames.length) {
+                const ready = nativeNames.filter(n => !placed.has(n) &&
+                    Array.from(deps[n]).every(d => placed.has(d)));
+                // per stabilità restiamo nell'ordine naturale tra i ready
+                ready.forEach(n => { placed.add(n); ordered.push(n); });
+                if (!ready.length) {
+                    // ciclo residuo (raro): appende ciò che resta in ordine originale
+                    nativeNames.forEach(n => { if (!placed.has(n)) placed.add(n), ordered.push(n); });
+                }
+            }
+
+            const bridgeDests = new Set();
+            bridgeNames.forEach(bn => {
+                (tables[bn].fks || []).forEach(fk => {
+                    const tgt = coordsTarget(fk);
+                    if (nativeNames.indexOf(tgt) !== -1) bridgeDests.add(tgt);
+                });
+            });
+
+            // Destinazioni ponte agli estremi (in ordine topologico), altre native al centro
+            const destInOrder = ordered.filter(n => bridgeDests.has(n));
+            const othersInOrder = ordered.filter(n => !bridgeDests.has(n));
+            const half = Math.ceil(destInOrder.length / 2);
+            const leftSide = destInOrder.slice(0, half);
+            const rightSide = destInOrder.slice(half).reverse();
+            const newOrder = [].concat(leftSide, othersInOrder, rightSide);
+
+            nativeNames.length = 0;
+            newOrder.forEach(n => nativeNames.push(n));
+            Object.keys(colIndex).forEach(k => delete colIndex[k]);
+            nativeNames.forEach((name, i) => { colIndex[name] = i; });
+        }
+
+
+        const nativeW = nativeNames.length * cardWidth + (nativeNames.length ? nativeNames.length - 1 : 0) * gap;
+        const totalW = nativeW + 2 * sideMargin;
+        const colX = i => sideMargin + i * (cardWidth + gap);
+        const centerX = i => colX(i) + cardWidth / 2;
+
+        const coords = {};
+
+        // Posizionamento native in alto
+        nativeNames.forEach((name, i) => {
+            coords[name] = { x: colX(i), y: topY, height: htOf(tables[name]), width: cardWidth, bridge: false, fkCenter: {}, pkY: {}, col: i };
+        });
+
+        const maxNativeBottom = nativeNames.reduce((m, n) => Math.max(m, coords[n].y + coords[n].height), topY);
+        const bridgeY = maxNativeBottom + gap / 2;
+
+        // Posizionamento ponte in basso: centrata tra le colonne native che riferisce
+        bridgeNames.forEach(name => {
+            const t = tables[name];
+            const cols = t.fks.map(fk => colIndex[coordsTarget(fk)]).filter(c => c != null);
+            const lo = cols.length ? Math.min.apply(null, cols) : 0;
+            const hi = cols.length ? Math.max.apply(null, cols) : 0;
+            const cx = (centerX(lo) + centerX(hi)) / 2;
+            coords[name] = { x: cx - cardWidth / 2, y: bridgeY, height: htOf(tables[name]), width: cardWidth, bridge: true, fkCenter: {}, pkY: {}, col: null };
+        });
+
+        let maxBottom = 0;
+        const names = nativeNames.concat(bridgeNames);
+
+        // Disegno dei blocchi tabella (come prima, registrando y di FK/PK)
+        let bodySvg = "";
+        names.forEach(name => {
+            const t = tables[name];
+            const coord = coords[name];
+            const x = coord.x, y = coord.y;
+
+            const pkRows = t.pks;
+            const fkRows = t.fks.filter(fk => !t.pks.includes(fk));
+            const stdRows = t.fields.filter(f => !t.pks.includes(f) && !t.fks.includes(f) && !t.assoc_fields.includes(f));
+            const allRows = [].concat(pkRows, stdRows, fkRows, t.assoc_fields);
+            const cardH = headerH + allRows.length * rowH;
+            coord.height = cardH;
+            if (y + cardH > maxBottom) maxBottom = y + cardH;
+
+            bodySvg += `<rect x="${x}" y="${y}" width="${cardWidth}" height="${cardH}" rx="5" fill="#fff" stroke="#52647a" stroke-width="1.7"/>`;
+            bodySvg += `<path d="M ${x + 5} ${y} H ${x + cardWidth - 5} Q ${x + cardWidth} ${y} ${x + cardWidth} ${y + 5} V ${y + headerH} H ${x} V ${y + 5} Q ${x} ${y} ${x + 5} ${y} Z" fill="#e2eaf5"/>`;
+            bodySvg += `<text x="${x + 12}" y="${y + headerH / 2}" font-size="15" text-anchor="start" font-weight="750" fill="#172b4d" dominant-baseline="middle">${name}</text>`;
+
+            let curY = y + headerH;
+
+            pkRows.forEach(pk => {
+                const isFk = t.fks.includes(pk);
+                const cx = curY + rowH / 2;
+                if (isFk) coord.fkCenter[pk] = cx;
+                coord.pkY[pk] = cx;
+                bodySvg += `<rect x="${x + 1}" y="${curY}" width="${cardWidth - 2}" height="${rowH}" fill="#fff5cc"/>`;
+                bodySvg += `<line x1="${x}" y1="${curY}" x2="${x + cardWidth}" y2="${curY}" stroke="#e2e8f0" stroke-width="1"/>`;
+                bodySvg += `<text x="${x + 12}" y="${cx}" font-size="13" text-anchor="start" font-weight="700" fill="#172b4d" dominant-baseline="middle">${pk}</text>`;
+                bodySvg += `<text x="${x + cardWidth - 10}" y="${cx}" font-size="10" text-anchor="end" font-weight="750" fill="#805b00" dominant-baseline="middle">${isFk ? "PK · FK" : "PK"}</text>`;
+                curY += rowH;
+            });
+
+            stdRows.forEach(f => {
+                const cx = curY + rowH / 2;
+                bodySvg += `<rect x="${x + 1}" y="${curY}" width="${cardWidth - 2}" height="${rowH}" fill="#fff"/>`;
+                bodySvg += `<line x1="${x}" y1="${curY}" x2="${x + cardWidth}" y2="${curY}" stroke="#e2e8f0" stroke-width="1"/>`;
+                bodySvg += `<text x="${x + 12}" y="${cx}" font-size="13" text-anchor="start" font-weight="500" fill="#172b4d" dominant-baseline="middle">${f}</text>`;
+                curY += rowH;
+            });
+
+            fkRows.forEach(fk => {
+                const cx = curY + rowH / 2;
+                coord.fkCenter[fk] = cx;
+                bodySvg += `<rect x="${x + 1}" y="${curY}" width="${cardWidth - 2}" height="${rowH}" fill="#e5f5eb"/>`;
+                bodySvg += `<line x1="${x}" y1="${curY}" x2="${x + cardWidth}" y2="${curY}" stroke="#e2e8f0" stroke-width="1"/>`;
+                bodySvg += `<text x="${x + 12}" y="${cx}" font-size="13" text-anchor="start" font-weight="500" fill="#172b4d" dominant-baseline="middle">${fk}</text>`;
+                bodySvg += `<text x="${x + cardWidth - 10}" y="${cx}" font-size="10" text-anchor="end" font-weight="750" fill="#17603a" dominant-baseline="middle">FK</text>`;
+                curY += rowH;
+            });
+
+            t.assoc_fields.forEach(af => {
+                const cx = curY + rowH / 2;
+                bodySvg += `<rect x="${x + 1}" y="${curY}" width="${cardWidth - 2}" height="${rowH}" fill="#f6eefd"/>`;
+                bodySvg += `<line x1="${x}" y1="${curY}" x2="${x + cardWidth}" y2="${curY}" stroke="#e2e8f0" stroke-width="1"/>`;
+                bodySvg += `<text x="${x + 12}" y="${cx}" font-size="13" text-anchor="start" font-style="italic" font-weight="500" fill="#7a3baf" dominant-baseline="middle">${af}</text>`;
+                curY += rowH;
+            });
+        });
+
+        // ---- Fase di instradamento con corsie dedicate ----
+
+        // Intervalo (x1, x2) libero per una corsia. Vogliamo intervalli che NON siano coperti
+        // dalla proiezione verticale della sorgente (soprattutto le ponte, in basso).
+        // Intervalli candidati: ogni gap interno + i due margini laterali.
+        const candidateLanes = [];
+        candidateLanes.push({ x1: 0, x2: sideMargin });                       // margine sinistro
+        for (let i = 0; i < nativeNames.length - 1; i++) {
+            candidateLanes.push({ x1: colX(i) + cardWidth, x2: colX(i + 1) }); // gap interno
+        }
+        candidateLanes.push({ x1: colX(nativeNames.length - 1) + cardWidth, x2: totalW }); // margine destro
+
+        // Costruiamo la lista di linee (edges) con i dati necessari
+        const edges = [];
+        names.forEach(name => {
+            const t = tables[name];
+            const src = coords[name];
+            t.fks.forEach(fk => {
+                const targetTable = coordsTarget(fk);
+                const dst = coords[targetTable];
+                if (!src || !dst || colIndex[targetTable] == null) return;
+                const srcY = src.fkCenter[fk] != null ? src.fkCenter[fk] : src.y + src.height / 2;
+                let dstPkName = dst.pkY[fk] != null ? fk
+                    : (Object.keys(dst.pkY).length ? Object.keys(dst.pkY)[0] : null);
+                if (dstPkName == null) return;
+                const dstY = dst.pkY[dstPkName];
+                edges.push({ src, dst, srcY, dstY, fk, dstPkName });
+            });
+        });
+
+        // ---- Assegnazione lati di ingresso per destinazione ----
+        // Per ogni destinazione alterniamo il lato di ingresso (sinistra/destra), così quando più FK
+        // puntano alla stessa tabella non convergono nello stesso punto del bordo.
+        const byDst = {};
+        edges.forEach(e => { const key = e.dst.x; (byDst[key] = byDst[key] || []).push(e); });
+        Object.keys(byDst).forEach(k => {
+            const grp = byDst[k];
+            grp.forEach((e, idx) => {
+                e.side = idx % 2 === 0 ? 'left' : 'right';
+            });
+        });
+
+        // La corsia è l'intervallo adiacente al lato di ingresso assegnato, switchando all'altro
+        // lato se l'intervallo fosse coperto dalla sorgente (es. una ponte che lo occupa in verticale).
+        edges.forEach(e => {
+            const dstLeftLane = { x1: Math.max(0, e.dst.x - gap), x2: e.dst.x };
+            const dstRightLane = { x1: e.dst.x + e.dst.width, x2: e.dst.x + e.dst.width + gap };
+            const isCovered = lane => {
+                const midL = (lane.x1 + lane.x2) / 2;
+                return midL > e.src.x - 4 && midL < e.src.x + e.src.width + 4;
+            };
+            let side = e.side;
+            if (side === 'left' && isCovered(dstLeftLane)) side = 'right';
+            if (side === 'right' && isCovered(dstRightLane)) side = 'left';
+            e.side = side;
+            e.lane = side === 'left' ? dstLeftLane : dstRightLane;
+        });
+
+        // Raggruppa le linee per corsia e distribuisci le x nelle corsie condivise
+        const laneGroup = {};
+        edges.forEach(e => { const k = e.side + '@' + e.dst.x; (laneGroup[k] = laneGroup[k] || []).push(e); });
+
+        Object.keys(laneGroup).forEach(k => {
+            const grp = laneGroup[k];
+            const lane = grp[0].lane;
+            const lo = lane.x1, hi = lane.x2;
+            const n = grp.length;
+            const spacing = hi > lo ? (hi - lo - 16) / Math.max(n, 1) : 20;
+            grp.forEach((e, idx) => {
+                e.laneX = lo + 8 + spacing * (idx + 0.5);
+            });
+        });
+
+        // Build delle etichette per corsia (una sola etichetta per corsia condivisa)
+        const laneLabels = {};
+        Object.keys(laneGroup).forEach(k => {
+            const grp = laneGroup[k];
+            if (grp.length === 1) {
+                laneLabels[k] = `${grp[0].fk} → ${grp[0].dstPkName}`;
+            } else {
+                laneLabels[k] = grp.map(e => e.fk).join(', ');
+            }
+        });
+        // Disegno linee
+        let lineSvg = "";
+        edges.forEach(e => {
+            const laneX = e.laneX;
+            // Il lato di ingresso deriva dalla corsia: se la corsia è a sinistra del centro della
+            // destinazione, entra dal lato sinistro; altrimenti dal lato destro.
+            let enterX;
+            if (laneX < e.dst.x + e.dst.width / 2) enterX = e.dst.x;
+            else enterX = e.dst.x + e.dst.width;
+
+            // Uscita dalla sorgente verso la corsia: dal lato della sorgente che guarda la corsia
+            let exitX;
+            if (laneX < e.src.x + e.src.width / 2) exitX = e.src.x;          // corsia a sinistra → esce a sinistra
+            else exitX = e.src.x + e.src.width;                               // corsia a destra → esce a destra
+
+            const path = `M ${exitX} ${e.srcY} L ${laneX} ${e.srcY} L ${laneX} ${e.dstY} L ${enterX} ${e.dstY}`;
+            lineSvg += `<path d="${path}" fill="none" stroke="#2458a6" stroke-width="1.8" stroke-linejoin="round"/>`;
+
+            e.enterX = enterX;
+            e.laneX = laneX;
+        });
+
+        // Frecce
+        edges.forEach(e => {
+            const dirH = e.enterX > e.laneX ? 1 : -1;
+            const tip = dirH > 0 ? e.enterX - 1 : e.enterX + 1;
+            const base = dirH > 0 ? tip - 7 : tip + 7;
+            lineSvg += `<polygon points="${tip},${e.dstY - 4} ${base},${e.dstY} ${tip},${e.dstY + 4}" fill="#2458a6"/>`;
+        });
+
+        // Etichette sul tratto verticale della corsia, con sfondo bianco per staccarle dai box
+        let labelSvg = "";
+        Object.keys(laneGroup).forEach(k => {
+            const grp = laneGroup[k];
+            const lane = grp[0];
+            const text = laneLabels[k];
+            const lx = lane.laneX;
+            const ly = (Math.min.apply(null, grp.map(e => e.srcY)) + Math.min.apply(null, grp.map(e => e.dstY))) / 2;
+            const rectW = text.length * 6.4 + 14;
+            const rectH = 18;
+            let rectX = lx - rectW / 2;
+            let tx = lx;
+            let anchor = "middle";
+            // Teneri dentro il disegno: se il riquadro sborda a sinistra, ancoriamo il testo verso destra
+            if (rectX < 0) { rectX = 2; tx = rectX + 6; anchor = "start"; }
+            else if (rectX + rectW > totalW) { rectX = totalW - rectW - 2; tx = rectX + (rectW - 6); anchor = "end"; }
+            const rectY = ly - rectH / 2;
+            labelSvg += `<rect x="${rectX}" y="${rectY}" width="${rectW}" height="${rectH}" rx="4" fill="#ffffff" stroke="#2458a6" stroke-width="0.8" opacity="0.95"/>`;
+            labelSvg += `<text x="${tx}" y="${ly + 2}" font-size="11" fill="#2458a6" text-anchor="${anchor}" font-weight="600">${text}</text>`;
+        });
+
+        const svgContent =
+            `<svg viewBox="0 0 ${totalW} 520" xmlns="http://www.w3.org/2000/svg" style="background:#ffffff;max-width:100%;height:auto;">` +
+            `<rect x="0" y="0" width="${totalW}" height="520" fill="#fff"/>` +
+            bodySvg + lineSvg + labelSvg +
+            `</svg>`;
+
+        currentSvgString = svgContent;
+        svgContainer.innerHTML = svgContent;
+    }
+    // Gestione dell'esportazione del file SVG nativo
+    btnDownload.addEventListener('click', () => {
+        if (!currentSvgString) return;
+        const blob = new Blob([currentSvgString], { type: 'image/svg+xml;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const downloadLink = document.createElement('a');
+        downloadLink.href = url;
+        downloadLink.download = 'modello_logico_relazionale.svg';
+        document.body.appendChild(downloadLink);
+        downloadLink.click();
+        document.body.removeChild(downloadLink);
+        URL.revokeObjectURL(url);
+    });
+
+    // Copia rapida dello Script SQL negli appunti
+    btnCopy.addEventListener('click', () => {
+        const text = sqlOutput.textContent;
+        navigator.clipboard.writeText(text).then(() => {
+            const originalText = btnCopy.textContent;
+            btnCopy.textContent = "✅ Copiato!";
+            btnCopy.style.backgroundColor = "#059669";
+            setTimeout(() => {
+                btnCopy.textContent = originalText;
+                btnCopy.style.backgroundColor = "#3b82f6";
+            }, 2000);
+        }).catch(err => {
+            alert("Impossibile copiare il codice automaticamente: " + err);
+        });
+    });
+});
+</script>
+
+</body>
+</html>

@@ -1,0 +1,1171 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Editor ER</title>
+<style>
+  :root {
+    --carta: #fbfbf9;
+    --linea: #22262b;
+    --griglia: #e4e6e8;
+    --barra: #eef0f2;
+    --bordo: #c9cdd2;
+    --accento: #1f5fbf;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex; flex-direction: column;
+    font: 14px/1.3 Helvetica, Arial, sans-serif;
+    color: var(--linea); background: var(--carta);
+  }
+
+  /* barra degli strumenti */
+  #toolbar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    padding: 8px 12px; background: var(--barra); border-bottom: 1px solid var(--bordo);
+  }
+  #toolbar button {
+    font: inherit; padding: 6px 12px; cursor: pointer;
+    border: 1px solid var(--bordo); border-radius: 4px; background: #fff; color: var(--linea);
+  }
+  #toolbar button:hover:not(:disabled) { border-color: var(--linea); }
+  #toolbar button:disabled { opacity: .45; cursor: default; }
+  #toolbar button.active { background: var(--accento); border-color: var(--accento); color: #fff; }
+  #toolbar button:focus-visible, #toolbar input:focus-visible { outline: 2px solid var(--accento); outline-offset: 2px; }
+  #toolbar select {
+    font: inherit; padding: 5px 8px; cursor: pointer;
+    border: 1px solid var(--bordo); border-radius: 4px; background: #fff; color: var(--linea);
+  }
+  #toolbar select:focus-visible { outline: 2px solid var(--accento); outline-offset: 2px; }
+  #toolbar .sep { width: 1px; align-self: stretch; margin: 0 4px; background: var(--bordo); }
+  #toolbar label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  /* barra di stato: altezza fissa, una sola riga, così il messaggio non sposta mai la tela */
+  #statusbar {
+    flex: none; display: flex; align-items: center; height: 30px; padding: 0 12px;
+    background: var(--barra); border-top: 1px solid var(--bordo);
+  }
+  #hint { color: #5b626a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* tela */
+  #stage { position: relative; flex: 1; min-height: 0; }
+  #canvas { display: block; width: 100%; height: 100%; background: var(--carta); cursor: grab; }
+  #canvas.adding { cursor: crosshair; }
+  #canvas.panning { cursor: grabbing; }
+  #toolbar #btnZoomReset { min-width: 4.4em; }
+
+  .item { cursor: move; }
+  .item rect, .item polygon { fill: #fff; stroke: var(--linea); stroke-width: 1.5; }
+  .item text {
+    font: 14px Helvetica, Arial, sans-serif; fill: var(--linea);
+    pointer-events: none; user-select: none;
+  }
+  .item.sel rect, .item.sel polygon { stroke: var(--accento); stroke-width: 3; }
+
+  /* campo di testo per rinominare, sovrapposto all'elemento */
+  #rename {
+    position: absolute; display: none; height: 28px; padding: 0 6px;
+    font: 14px Helvetica, Arial, sans-serif; text-align: center;
+    border: 2px solid var(--accento); border-radius: 3px; background: #fff; color: var(--linea);
+  }
+  #rename.open { display: block; }
+
+  /* collegamenti */
+  .link .hit { fill: none; stroke: transparent; stroke-width: 14; pointer-events: stroke; cursor: pointer; vector-effect: non-scaling-stroke; }
+  .link .line, .link .foot { fill: none; stroke: var(--linea); stroke-width: 1.5; stroke-linecap: round; pointer-events: none; }
+  .link.sel .line, .link.sel .foot { stroke: var(--accento); stroke-width: 3; }
+  .item.pending rect, .item.pending polygon { stroke: var(--accento); stroke-width: 3; stroke-dasharray: 6 4; }
+
+  /* attributi */
+  .attr { cursor: move; }
+  .attr .ahit { fill: transparent; stroke: none; }
+  .attr .dot { fill: #fff; stroke: var(--linea); stroke-width: 1.5; cursor: pointer; }
+  .attr.pk .dot { fill: var(--linea); }
+  .attr text { font: 14px Helvetica, Arial, sans-serif; fill: var(--linea); pointer-events: none; user-select: none; }
+  .attr .under { stroke: var(--linea); stroke-width: 1.2; display: none; pointer-events: none; }
+  .attr.pk .under { display: block; }
+  .attr.sel .dot { stroke: var(--accento); stroke-width: 3; }
+  .attr.sel text { fill: var(--accento); }
+  .attr.sel .under { stroke: var(--accento); }
+  .aline { stroke: var(--linea); stroke-width: 1.2; pointer-events: none; }
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <button id="btnEntity" type="button">Aggiungi entità</button>
+  <button id="btnAssoc" type="button">Aggiungi associazione</button>
+  <button id="btnRec" type="button">Associazione ricorsiva</button>
+  <button id="btnAttr" type="button">Aggiungi attributo</button>
+  <button id="btnLink" type="button">Collega</button>
+  <span class="sep"></span>
+  <button id="btnDelete" type="button">Elimina</button>
+  <button id="btnNew" type="button">Nuovo diagramma</button>
+  <span class="sep"></span>
+  <button id="btnUndo" type="button">Annulla</button>
+  <button id="btnRedo" type="button">Ripeti</button>
+  <span class="sep"></span>
+  <button id="btnOpen" type="button">Apri JSON</button>
+  <button id="btnSave" type="button">Salva JSON</button>
+  <button id="btnSvg" type="button">Esporta SVG</button>
+  <button id="btnPng" type="button">Esporta PNG</button>
+  <span class="sep"></span>
+  <label><input type="checkbox" id="chkSnap" checked> Griglia</label>
+  <label>Attributi
+    <select id="selAttrs">
+      <option value="all">Tutti</option>
+      <option value="pk">Solo identificatori</option>
+      <option value="none">Nessuno</option>
+    </select>
+  </label>
+  <button id="btnFlip" type="button" disabled title="Sposta gli attributi dell’elemento selezionato dall’altro lato">Ribalta attributi</button>
+  <span class="sep"></span>
+  <button id="btnZoomOut" type="button" title="Riduci" aria-label="Riduci">−</button>
+  <button id="btnZoomReset" type="button" title="Torna al 100%">100%</button>
+  <button id="btnZoomIn" type="button" title="Ingrandisci" aria-label="Ingrandisci">+</button>
+  <button id="btnFit" type="button" title="Mostra tutto il diagramma">Adatta</button>
+  <input type="file" id="fileOpen" accept=".json,application/json" hidden>
+</div>
+
+<div id="stage">
+  <svg id="canvas" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMinYMin meet">
+    <defs>
+      <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+        <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#e4e6e8" stroke-width="1"/>
+      </pattern>
+    </defs>
+    <rect id="gridrect" width="100%" height="100%" fill="url(#grid)"/>
+    <g id="links"></g>
+    <g id="attrlines"></g>
+    <g id="attrs"></g>
+    <g id="layer"></g>
+  </svg>
+  <input id="rename" type="text" spellcheck="false" autocomplete="off">
+</div>
+<div id="statusbar"><span id="hint"></span></div>
+
+<script>
+  // mostra nella barra gli errori JavaScript e i file mancanti (utile se qualcosa non parte)
+  (function () {
+    var msgs = [];
+    window.addEventListener('error', function (e) {
+      var h = document.getElementById('hint');
+      var m = e.target && e.target.src
+        ? 'File non trovato: ' + e.target.getAttribute('src')
+        : e.message + ' [riga ' + e.lineno + ', col ' + e.colno + ']' +
+          (e.error && e.error.stack ? ' ' + e.error.stack.split('\n').slice(0, 3).join(' / ') : '');
+      msgs.push(m);
+      if (h) {
+        h.style.color = '#b3261e';
+        h.style.whiteSpace = 'normal';           // in caso di errore la barra si allarga per mostrarlo tutto
+        h.parentNode.style.height = 'auto';
+        h.textContent = msgs.slice(-3).join('  ||  ');
+      }
+    }, true);
+  })();
+</script>
+<script src="jquery.min.js"></script>
+<script>
+$(function () {
+  'use strict';
+
+  // ============================================================
+  //  COSTANTI E STATO
+  // ============================================================
+  const NS   = 'http://www.w3.org/2000/svg';
+  const GRID = 20;
+  const LABEL = { entity: 'Entità', association: 'Associazione' };
+
+  const $svg    = $('#canvas');
+  const svg     = $svg[0];
+  const $layer  = $('#layer');
+  const $input  = $('#rename');
+
+  // Formato JSON del modello (verrà salvato/caricato nel pezzo 4):
+  // { version, entities[], associations[], attributes[], links[] }
+  function emptyModel() {
+    return { version: 1, entities: [], associations: [], attributes: [], links: [] };
+  }
+
+  let model    = emptyModel();
+  const sizes  = {};      // id -> { w, h }, calcolati al disegno (servono ai collegamenti)
+  let selected = null;    // { kind, id }
+  let addMode  = null;    // 'entity' | 'association' | null
+  let snap     = true;
+  let drag     = null;
+  let renaming = null;
+  let linkFrom = null;    // primo elemento scelto in modalità "Collega"
+
+  // ============================================================
+  //  MODELLO
+  // ============================================================
+  function list(kind) {
+    return kind === 'entity' ? model.entities : kind === 'attribute' ? model.attributes : model.associations;
+  }
+  function find(kind, id) { return list(kind).find(o => o.id === id); }
+
+  function newId(prefix, items) {
+    const max = items.reduce((m, o) => Math.max(m, parseInt(o.id.slice(1), 10)), 0);
+    return prefix + (max + 1);
+  }
+
+  function uniqueName(kind) {
+    const items = list(kind);
+    let n = items.length + 1;
+    while (items.some(o => o.name === LABEL[kind] + n)) n++;
+    return LABEL[kind] + n;
+  }
+
+  function createItem(kind, x, y) {
+    const o = {
+      id: newId(kind === 'entity' ? 'e' : 'a', list(kind)),
+      name: uniqueName(kind),
+      x: x, y: y
+    };
+    list(kind).push(o);
+    render();
+    return o;
+  }
+
+  function removeSelected() {
+    if (!selected) return;
+    if (selected.kind === 'link') {          // eliminazione di un solo collegamento
+      model.links = model.links.filter(l => l.id !== selected.id);
+      selected = null;
+      render();
+      pushHistory();
+      return;
+    }
+    if (selected.kind === 'attribute') {     // eliminazione di un solo attributo
+      model.attributes = model.attributes.filter(t => t.id !== selected.id);
+      selected = null;
+      render();
+      pushHistory();
+      return;
+    }
+    const s = selected;
+    const items = list(s.kind);
+    items.splice(items.findIndex(o => o.id === s.id), 1);
+    // a cascata: collegamenti e attributi dell'elemento (arrays vuoti fino ai pezzi 2 e 3)
+    model.links      = model.links.filter(l => l.entity !== s.id && l.assoc !== s.id);
+    model.attributes = model.attributes.filter(t => t.owner !== s.id);
+    delete sizes[s.id];
+    selected = null;
+    render();
+    pushHistory();
+  }
+
+  // ============================================================
+  //  DISEGNO SVG
+  // ============================================================
+  function svgEl(name, attrs) {
+    const el = document.createElementNS(NS, name);
+    if (attrs) $(el).attr(attrs);
+    return $(el);
+  }
+
+  function drawItem(kind, o) {
+    const $g = svgEl('g', {
+      'class': 'item ' + kind,
+      'data-kind': kind,
+      'data-id': o.id,
+      transform: 'translate(' + o.x + ',' + o.y + ')'
+    });
+    const $t = svgEl('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central' }).text(o.name);
+    $g.append($t);
+    $layer.append($g);                       // serve nel DOM per misurare il testo
+    const tw = $t[0].getBBox().width;
+
+    let $shape, w, h;
+    if (kind === 'entity') {
+      w = Math.max(100, Math.ceil((tw + 32) / GRID) * GRID);
+      h = 40;
+      $shape = svgEl('rect', { x: -w / 2, y: -h / 2, width: w, height: h });
+    } else {
+      w = Math.max(120, Math.ceil((tw * 1.6 + 24) / GRID) * GRID);
+      h = 60;
+      $shape = svgEl('polygon', {
+        points: '0,' + (-h / 2) + ' ' + (w / 2) + ',0 0,' + (h / 2) + ' ' + (-w / 2) + ',0'
+      });
+    }
+    $g.prepend($shape);
+    sizes[o.id] = { w: w, h: h };
+  }
+
+  function render() {
+    $layer.empty();
+    model.entities.forEach(o => drawItem('entity', o));
+    model.associations.forEach(o => drawItem('association', o));
+    drawLinks();
+    drawAttrs();
+    markSelected();
+  }
+
+  function markSelected() {
+    $layer.find('.item').removeClass('sel pending');
+    $('#links .link').removeClass('sel');
+    $('#attrs .attr').removeClass('sel');
+    if (selected) {
+      $layer.find('.item[data-id="' + selected.id + '"]').addClass('sel');
+      $('#links .link[data-id="' + selected.id + '"]').addClass('sel');
+      $('#attrs .attr[data-id="' + selected.id + '"]').addClass('sel');
+    }
+    if (linkFrom) $layer.find('.item[data-id="' + linkFrom.id + '"]').addClass('pending');
+    $('#btnDelete').prop('disabled', !selected);
+    const fo = flipOwner();                          // Ribalta: attivo se l'elemento selezionato ha attributi
+    $('#btnFlip').prop('disabled', !fo || !model.attributes.some(t => t.owner === fo));
+  }
+
+  function select(kind, id) {
+    selected = kind ? { kind: kind, id: id } : null;
+    markSelected();
+  }
+
+  // ============================================================
+  //  COORDINATE
+  // ============================================================
+  function snapv(v) { return snap ? Math.round(v / GRID) * GRID : Math.round(v); }
+
+  function pointer(e) {
+    return new DOMPoint(e.clientX, e.clientY).matrixTransform(svg.getScreenCTM().inverse());
+  }
+
+  // ============================================================
+  //  RINOMINA (campo di testo sovrapposto)
+  // ============================================================
+  function startRename(kind, id) {
+    const o = find(kind, id);
+    const m = svg.getScreenCTM();
+    const r = $('#stage')[0].getBoundingClientRect();
+    let cx, cy, width;                       // centro e larghezza del campo, in coordinate della tela
+    if (kind === 'attribute') {
+      const p = attrPos(o);
+      width = 140; cx = o.dx < 0 ? p.x - 12 - width / 2 : p.x + 12 + width / 2; cy = p.y;   // sopra l'etichetta, dal lato in cui sta
+    } else {
+      width = Math.max(sizes[id].w, 120); cx = o.x; cy = o.y;
+    }
+    renaming = { kind: kind, id: id };
+    $input.css({ left: m.a * cx + m.e - r.left - width * m.a / 2, top: m.d * cy + m.f - r.top - 14, width: width * m.a })
+          .val(o.name).addClass('open').focus().select();
+  }
+
+  function endRename(commit) {
+    if (!renaming) return;
+    const r = renaming;
+    renaming = null;
+    const v = $input.val().trim();
+    $input.removeClass('open');
+    if (commit && v && v !== find(r.kind, r.id).name) {
+      find(r.kind, r.id).name = v;
+      render();
+      pushHistory();
+    }
+  }
+
+  $input.on('keydown', function (e) {
+    e.stopPropagation();
+    if (e.key === 'Enter') endRename(true);
+    else if (e.key === 'Escape') endRename(false);
+  }).on('blur', function () { endRename(true); });
+
+  // ============================================================
+  //  MODALITÀ "AGGIUNGI" E BARRA DEGLI STRUMENTI
+  // ============================================================
+  const HINTS = {
+    none:        'Doppio clic per rinominare. Clic su un collegamento per alternare 1 e molti. Clic sul pallino di un attributo per alternare identificatore. Canc per eliminare.',
+    entity:      'Clicca sulla tela per posizionare l\u2019entità. Esc per annullare.',
+    association: 'Clicca sulla tela per posizionare l\u2019associazione. Esc per annullare.',
+    recursive:   'Clicca l\u2019entità su cui creare l\u2019associazione ricorsiva. Esc per annullare.',
+    attribute:   'Clicca un\u2019entità o un\u2019associazione per aggiungere un attributo. Esc per uscire.',
+    link:        'Clicca un\u2019entità e un\u2019associazione per collegarle. Esc per uscire.'
+  };
+
+  function setAddMode(mode) {
+    addMode = mode;
+    linkFrom = null;
+    $('#btnEntity').toggleClass('active', mode === 'entity');
+    $('#btnAssoc').toggleClass('active', mode === 'association');
+    $('#btnRec').toggleClass('active', mode === 'recursive');
+    $('#btnAttr').toggleClass('active', mode === 'attribute');
+    $('#btnLink').toggleClass('active', mode === 'link');
+    $svg.toggleClass('adding', mode === 'entity' || mode === 'association');
+    $('#hint').text(HINTS[mode || 'none']);
+    markSelected();
+  }
+
+  $('#btnEntity').on('click', function () { setAddMode(addMode === 'entity' ? null : 'entity'); });
+  $('#btnAssoc').on('click',  function () { setAddMode(addMode === 'association' ? null : 'association'); });
+  $('#btnRec').on('click',    function () { setAddMode(addMode === 'recursive' ? null : 'recursive'); });
+  $('#btnAttr').on('click',   function () { setAddMode(addMode === 'attribute' ? null : 'attribute'); });
+  $('#btnLink').on('click',   function () { setAddMode(addMode === 'link' ? null : 'link'); });
+  $('#btnDelete').on('click', removeSelected);
+
+  $('#btnNew').on('click', function () {
+    const n = model.entities.length + model.associations.length;
+    if (n && !window.confirm('Il diagramma attuale verrà cancellato. Continuare?')) return;
+    model = emptyModel();
+    Object.keys(sizes).forEach(k => delete sizes[k]);
+    selected = null;
+    setAddMode(null);
+    render();
+    pushHistory();
+  });
+
+  $('#chkSnap').on('change', function () {
+    snap = this.checked;
+    $('#gridrect').attr('visibility', snap ? 'visible' : 'hidden');
+  });
+
+  // ============================================================
+  //  INTERAZIONE SULLA TELA
+  // ============================================================
+  // clic sullo sfondo: posiziona un nuovo elemento oppure deseleziona
+  $svg.on('mousedown', function (e) {
+    if ($(e.target).closest('.item, .attr').length) return;
+    endRename(true);
+    if (addMode === 'entity' || addMode === 'association') {
+      const p = pointer(e);
+      const kind = addMode;
+      setAddMode(null);
+      const o = createItem(kind, snapv(p.x), snapv(p.y));
+      select(kind, o.id);
+      startRename(kind, o.id);
+      e.preventDefault();                // lascia il focus al campo di testo
+      pushHistory();
+      return;
+    }
+    cancelPending();
+    select(null);
+    startPan(e);                             // trascinando lo sfondo vuoto si sposta la vista
+  });
+
+  // clic su un elemento: seleziona e inizia il trascinamento
+  $svg.on('mousedown', '.item', function (e) {
+    if (e.button !== 0) return;
+    if (addMode === 'link') {                // in modalità "Collega" il clic sceglie l'elemento
+      endRename(true);
+      pickLinkElement($(this).attr('data-kind'), $(this).attr('data-id'));
+      e.preventDefault();
+      return;
+    }
+    if (addMode === 'attribute') {           // in modalità "Attributo" il clic aggiunge un attributo all'elemento
+      endRename(true);
+      addAttribute($(this).attr('data-id'));
+      e.preventDefault();
+      return;
+    }
+    if (addMode === 'recursive') {           // in modalità "Associazione ricorsiva" il clic sceglie l'entità
+      endRename(true);
+      if ($(this).attr('data-kind') === 'entity') addRecursive($(this).attr('data-id'));
+      else $('#hint').text('Scegli un\u2019entità.');
+      e.preventDefault();
+      return;
+    }
+    const kind = $(this).attr('data-kind');
+    const id   = $(this).attr('data-id');
+    endRename(true);                     // può ridisegnare: ripesco l'elemento dopo
+    select(kind, id);
+    const o = find(kind, id);
+    const p = pointer(e);
+    drag = {
+      o: o,
+      $g: $layer.find('.item[data-id="' + id + '"]'),
+      dx: p.x - o.x,
+      dy: p.y - o.y,
+      moved: false
+    };
+    e.preventDefault();
+  });
+
+  $(document).on('mousemove', function (e) {
+    if (!drag) return;
+    const p = pointer(e);
+    if (drag.kind === 'attribute') {         // trascinamento di un attributo: aggiorna lo scostamento dal suo elemento
+      const ow = ownerOf(drag.o.owner);
+      drag.o.dx = snapv(p.x - drag.dx) - ow.x;
+      drag.o.dy = snapv(p.y - drag.dy) - ow.y;
+      drag.moved = true;
+      placeAttrs();
+      return;
+    }
+    drag.o.x = snapv(p.x - drag.dx);
+    drag.o.y = snapv(p.y - drag.dy);
+    drag.$g.attr('transform', 'translate(' + drag.o.x + ',' + drag.o.y + ')');
+    drag.moved = true;
+    drawLinks();
+    placeAttrs();
+  });
+
+  $(document).on('mouseup', function () {
+    // clic sul pallino senza spostarsi: alterna identificatore (in place, senza ridisegnare)
+    if (drag && drag.kind === 'attribute' && drag.onDot && !drag.moved) {
+      drag.o.pk = !drag.o.pk;
+      drag.$g.toggleClass('pk', drag.o.pk);
+      pushHistory();
+      if (attrView === 'pk') {                          // in "solo identificatori" un attributo non più identificatore sparisce
+        if (!drag.o.pk && selected && selected.id === drag.o.id) selected = null;
+        render();
+      }
+    }
+    if (drag && drag.moved) pushHistory();
+    drag = null;
+  });
+
+  $svg.on('dblclick', '.item', function () {
+    startRename($(this).attr('data-kind'), $(this).attr('data-id'));
+  });
+
+  // clic su un attributo: lo seleziona e inizia il trascinamento
+  $svg.on('mousedown', '.attr', function (e) {
+    if (e.button !== 0) return;
+    const id = $(this).attr('data-id');
+    endRename(true);                         // può ridisegnare: ripesco l'elemento dopo
+    select('attribute', id);
+    const t = find('attribute', id);
+    const a = attrPos(t), p = pointer(e);
+    drag = {
+      kind: 'attribute',
+      o: t,
+      $g: $('#attrs .attr[data-id="' + id + '"]'),
+      onDot: $(e.target).is('circle'),       // clic sul pallino: se non ci si sposta, alterna identificatore
+      dx: p.x - a.x,
+      dy: p.y - a.y,
+      moved: false
+    };
+    e.preventDefault();
+  });
+
+  $svg.on('dblclick', '.attr', function () {
+    startRename('attribute', $(this).attr('data-id'));
+  });
+
+  $(document).on('keydown', function (e) {
+    if ($(e.target).is('input[type="text"], textarea')) return;
+    if ((e.ctrlKey || e.metaKey) && !e.altKey) {          // Ctrl/Cmd+Z annulla, Ctrl/Cmd+Maiusc+Z o Ctrl+Y ripeti
+      const k = e.key.toLowerCase();
+      if (k === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return; }
+      if (k === 'y') { e.preventDefault(); redo(); return; }
+    }
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      removeSelected();
+      e.preventDefault();
+    } else if (e.key === 'Escape') {
+      setAddMode(null);
+      select(null);
+    }
+  });
+
+  // ============================================================
+  //  COLLEGAMENTI (entità - associazione)
+  // ============================================================
+  const r1 = v => Math.round(v * 10) / 10;
+
+  // punto in cui la retta dal centro di c verso (tx,ty) esce dal rettangolo dell'entità
+  function clipRect(c, s, tx, ty) {
+    const dx = tx - c.x, dy = ty - c.y;
+    const t = Math.min(dx ? (s.w / 2) / Math.abs(dx) : Infinity,
+                       dy ? (s.h / 2) / Math.abs(dy) : Infinity);
+    return { x: c.x + dx * t, y: c.y + dy * t };
+  }
+
+  // idem per il rombo dell'associazione
+  function clipDiamond(c, s, tx, ty) {
+    const dx = tx - c.x, dy = ty - c.y;
+    const t = 1 / (Math.abs(dx) / (s.w / 2) + Math.abs(dy) / (s.h / 2));
+    return { x: c.x + dx * t, y: c.y + dy * t };
+  }
+
+  // k = posizione di questo collegamento tra quelli della stessa coppia, n = quanti sono
+  function drawLink(l, e, a, k, n) {
+    const dx = a.x - e.x, dy = a.y - e.y, len = Math.hypot(dx, dy);
+    if (!len) return;                                   // centri coincidenti: niente da disegnare
+
+    // più collegamenti tra la stessa coppia (associazione ricorsiva): archi affiancati
+    const off = (k - (n - 1) / 2) * 80;
+    const cx = (e.x + a.x) / 2 - dy / len * off;
+    const cy = (e.y + a.y) / 2 + dx / len * off;
+
+    const p0 = clipRect(e, sizes[e.id], cx, cy);        // sul bordo dell'entità
+    const p1 = clipDiamond(a, sizes[a.id], cx, cy);     // sul bordo del rombo
+    const d = n > 1
+      ? 'M' + r1(p0.x) + ',' + r1(p0.y) + ' Q' + r1(cx) + ',' + r1(cy) + ' ' + r1(p1.x) + ',' + r1(p1.y)
+      : 'M' + r1(p0.x) + ',' + r1(p0.y) + ' L' + r1(p1.x) + ',' + r1(p1.y);
+
+    const $g = svgEl('g', { 'class': 'link', 'data-id': l.id });
+    $g.append(svgEl('path', { 'class': 'hit',  d: d }));   // zona di clic più larga
+    $g.append(svgEl('path', { 'class': 'line', d: d }));
+
+    if (l.many) {                                       // zampa di gallina sull'entità
+      const ux = cx - p0.x, uy = cy - p0.y, ul = Math.hypot(ux, uy) || 1;
+      const tx = ux / ul, ty = uy / ul;                 // direzione uscente dall'entità
+      const fx = p0.x + tx * 18, fy = p0.y + ty * 18;   // punto in cui i rebbi si uniscono
+      const foot =
+        'M' + r1(fx) + ',' + r1(fy) + ' L' + r1(p0.x - ty * 9) + ',' + r1(p0.y + tx * 9) +
+        ' M' + r1(fx) + ',' + r1(fy) + ' L' + r1(p0.x + ty * 9) + ',' + r1(p0.y - tx * 9);
+      $g.append(svgEl('path', { 'class': 'foot', d: foot }));
+    }
+    $('#links').append($g);
+  }
+
+  function drawLinks() {
+    $('#links').empty();
+    const groups = {};
+    model.links.forEach(l => {
+      const key = l.entity + '|' + l.assoc;
+      (groups[key] = groups[key] || []).push(l);
+    });
+    model.links.forEach(l => {
+      const e = find('entity', l.entity), a = find('association', l.assoc);
+      const grp = groups[l.entity + '|' + l.assoc];
+      if (e && a) drawLink(l, e, a, grp.indexOf(l), grp.length);
+    });
+    markSelected();
+  }
+
+  // modalità "Collega": primo clic sceglie un elemento, secondo clic sull'altro tipo crea il collegamento
+  function pickLinkElement(kind, id) {
+    if (linkFrom && linkFrom.id === id) return;
+    if (!linkFrom || linkFrom.kind === kind) {          // primo elemento (o ripensamento)
+      linkFrom = { kind: kind, id: id };
+      $('#hint').text('Ora clicca ' + (kind === 'entity' ? 'un\u2019associazione' : 'un\u2019entità') + '.');
+      markSelected();
+      return;
+    }
+    model.links.push({
+      id: newId('l', model.links),
+      entity: kind === 'entity' ? id : linkFrom.id,
+      assoc:  kind === 'entity' ? linkFrom.id : id,
+      many: false                                       // false = lato 1, true = lato molti
+    });
+    linkFrom = null;
+    $('#hint').text(HINTS.link);
+    drawLinks();
+    pushHistory();
+  }
+
+  function cancelPending() {
+    if (!linkFrom) return;
+    linkFrom = null;
+    $('#hint').text(HINTS.link);
+    markSelected();
+  }
+
+  // clic su un collegamento: lo seleziona e alterna lato 1 / lato molti
+  $('#links').on('mousedown', '.link', function (e) {
+    if (e.button !== 0) return;
+    endRename(true);
+    const l = model.links.find(x => x.id === $(this).attr('data-id'));
+    if (!l) return;
+    l.many = !l.many;
+    selected = { kind: 'link', id: l.id };
+    drawLinks();
+    e.stopPropagation();
+    e.preventDefault();
+    pushHistory();
+  });
+
+  // ============================================================
+  //  ATTRIBUTI (di entità e di associazioni)
+  // ============================================================
+  // un attributo memorizza solo lo scostamento (dx, dy) dal centro del suo elemento: così lo segue
+  function ownerOf(id) { return find('entity', id) || find('association', id); }
+
+  function attrPos(t) {
+    const ow = ownerOf(t.owner);
+    return { x: ow.x + t.dx, y: ow.y + t.dy };
+  }
+
+  function addAttribute(ownerId) {
+    if (attrView !== 'all') setAttrView('all');         // il nuovo attributo deve vedersi
+    const k = model.attributes.filter(t => t.owner === ownerId).length;
+    const t = {
+      id: newId('t', model.attributes),
+      owner: ownerId,
+      name: 'attributo' + (k + 1),
+      pk: false,                                                   // true = identificatore
+      dx: Math.ceil((sizes[ownerId].w / 2 + 60) / GRID) * GRID,   // a destra dell'elemento
+      dy: k * GRID                                                 // uno sotto l'altro
+    };
+    model.attributes.push(t);
+    render();
+    select('attribute', t.id);
+    startRename('attribute', t.id);
+    pushHistory();
+  }
+
+  function drawAttrs() {
+    const $a = $('#attrs').empty();
+    model.attributes.forEach(t => {
+      if (!ownerOf(t.owner) || !attrVisible(t)) return;
+      const $g     = svgEl('g', { 'class': 'attr' + (t.pk ? ' pk' : ''), 'data-id': t.id });
+      const $hit   = svgEl('rect', { 'class': 'ahit', y: -11, height: 22 });
+      const $dot   = svgEl('circle', { 'class': 'dot', r: 5 });
+      const $txt   = svgEl('text', { y: 0, 'dominant-baseline': 'central' }).text(t.name);
+      const $under = svgEl('line', { 'class': 'under', y1: 9, y2: 9 });
+      $g.append($hit, $dot, $txt, $under);
+      $a.append($g);                                   // serve nel DOM per misurare il testo
+      layoutAttr($g, t);
+    });
+    placeAttrs();
+    markSelected();
+  }
+
+  // l'etichetta sta a destra del pallino se l'attributo è a destra dell'elemento, a sinistra se è a sinistra:
+  // così la linea che arriva dall'elemento non attraversa mai il nome
+  function layoutAttr($g, t) {
+    const left = t.dx < 0;
+    const $txt = $g.find('text');
+    const tw = $txt[0].getBBox().width;
+    $g.attr('data-side', left ? 'l' : 'r');
+    $txt.attr({ x: left ? -12 : 12, 'text-anchor': left ? 'end' : 'start' });
+    $g.find('.under').attr({ x1: left ? -12 - tw : 12, x2: left ? -12 : 12 + tw });   // sottolineatura (solo identificatori)
+    $g.find('.ahit').attr({ x: left ? -(tw + 18) : -9, width: tw + 27 });
+  }
+
+  // posiziona i gruppi degli attributi e ridisegna le linee che li uniscono ai loro elementi
+  function placeAttrs() {
+    const $l = $('#attrlines').empty();
+    model.attributes.forEach(t => {
+      const ow = ownerOf(t.owner);
+      if (!ow || !attrVisible(t)) return;
+      const p = attrPos(t);
+      const $g = $('#attrs .attr[data-id="' + t.id + '"]');
+      if ($g.attr('data-side') !== (t.dx < 0 ? 'l' : 'r')) layoutAttr($g, t);   // trascinato dall'altra parte: l'etichetta lo segue
+      $g.attr('transform', 'translate(' + p.x + ',' + p.y + ')');
+      if (p.x === ow.x && p.y === ow.y) return;        // sopra il centro dell'elemento: niente linea
+      const b = find('entity', ow.id)
+        ? clipRect(ow, sizes[ow.id], p.x, p.y)
+        : clipDiamond(ow, sizes[ow.id], p.x, p.y);
+      $l.append(svgEl('line', { 'class': 'aline', x1: r1(b.x), y1: r1(b.y), x2: r1(p.x), y2: r1(p.y) }));
+    });
+  }
+
+  // ============================================================
+  //  CRONOLOGIA (annulla / ripeti)
+  // ============================================================
+  const HISTORY_MAX = 100;
+  let states   = [JSON.stringify(model)];    // istantanee del modello; la prima è il diagramma vuoto
+  let stateIdx = 0;
+
+  function pushHistory() {
+    const now = JSON.stringify(model);
+    if (now === states[stateIdx]) return;             // nessuna modifica reale
+    states = states.slice(0, stateIdx + 1);           // una nuova modifica cancella il "ripeti"
+    states.push(now);
+    if (states.length > HISTORY_MAX) states.shift();
+    stateIdx = states.length - 1;
+    updateHistoryButtons();
+  }
+
+  function selectionExists() {
+    if (!selected) return false;
+    if (selected.kind === 'link') return model.links.some(l => l.id === selected.id);
+    return !!find(selected.kind, selected.id);
+  }
+
+  function restoreHistory(i) {
+    endRename(false);
+    stateIdx = i;
+    model = JSON.parse(states[i]);
+    Object.keys(sizes).forEach(k => delete sizes[k]);
+    linkFrom = null;
+    if (!selectionExists()) selected = null;
+    render();
+    updateHistoryButtons();
+  }
+
+  function undo() { if (stateIdx > 0) restoreHistory(stateIdx - 1); }
+  function redo() { if (stateIdx < states.length - 1) restoreHistory(stateIdx + 1); }
+
+  function updateHistoryButtons() {
+    $('#btnUndo').prop('disabled', stateIdx <= 0);
+    $('#btnRedo').prop('disabled', stateIdx >= states.length - 1);
+  }
+
+  // ============================================================
+  //  SALVA E APRI (JSON)
+  // ============================================================
+  function download(name, blob) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function saveJson() {
+    download('diagramma-er.json', new Blob([JSON.stringify(model, null, 2)], { type: 'application/json' }));
+  }
+
+  // controlla e ripulisce un file caricato: id nel formato atteso (finiscono nei selettori),
+  // riferimenti esistenti, tipi corretti; ciò che non torna viene scartato o rifiutato
+  function normalizeModel(o) {
+    if (!o || typeof o !== 'object') throw new Error('il file non contiene un diagramma');
+    const num = v => (typeof v === 'number' && isFinite(v)) ? v : 0;
+    const str = v => String(v == null ? '' : v);
+    const check = (items, re, what) => {
+      if (items === undefined) return [];
+      if (!Array.isArray(items)) throw new Error('"' + what + '" non è un elenco');
+      const seen = Object.create(null);
+      items.forEach(it => {
+        if (!it || typeof it.id !== 'string' || !re.test(it.id) || seen[it.id]) {
+          throw new Error('identificativo non valido in "' + what + '"');
+        }
+        seen[it.id] = true;
+      });
+      return items;
+    };
+    const m = emptyModel();
+    const box = it => ({ id: it.id, name: str(it.name), x: num(it.x), y: num(it.y) });
+    m.entities     = check(o.entities,     /^e\d+$/, 'entities').map(box);
+    m.associations = check(o.associations, /^a\d+$/, 'associations').map(box);
+    const kinds = Object.create(null);
+    m.entities.forEach(e => { kinds[e.id] = 'e'; });
+    m.associations.forEach(a => { kinds[a.id] = 'a'; });
+    m.attributes = check(o.attributes, /^t\d+$/, 'attributes')
+      .filter(t => kinds[t.owner])
+      .map(t => ({ id: t.id, owner: t.owner, name: str(t.name), pk: !!t.pk, dx: num(t.dx), dy: num(t.dy) }));
+    m.links = check(o.links, /^l\d+$/, 'links')
+      .filter(l => kinds[l.entity] === 'e' && kinds[l.assoc] === 'a')
+      .map(l => ({ id: l.id, entity: l.entity, assoc: l.assoc, many: !!l.many }));
+    return m;
+  }
+
+  $('#fileOpen').on('change', function () {
+    const f = this.files[0];
+    this.value = '';                                  // permette di riaprire lo stesso file
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = function () {
+      let m;
+      try {
+        m = normalizeModel(JSON.parse(reader.result));
+      } catch (err) {
+        window.alert('File non valido: ' + err.message);
+        return;
+      }
+      endRename(false);
+      model = m;
+      Object.keys(sizes).forEach(k => delete sizes[k]);
+      selected = null;
+      setAddMode(null);
+      render();
+      fitView();                                      // mostra tutto il diagramma aperto
+      pushHistory();                                  // si può annullare l'apertura
+    };
+    reader.readAsText(f);
+  });
+
+  // ============================================================
+  //  ESPORTAZIONE (SVG e PNG)
+  // ============================================================
+  const FONT = 'Helvetica, Arial, sans-serif';
+
+  function esc(v) {
+    return String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function textEl(x, y, str, anchor) {
+    return '<text x="' + x + '" y="' + y + '" text-anchor="' + anchor + '" dy=".35em" font-family="' + FONT +
+           '" font-size="14" fill="#000">' + esc(str) + '</text>';
+  }
+
+  // SVG autonomo: solo attributi di presentazione (niente CSS né classi), così lo leggono anche
+  // asciidoctor-pdf, Inkscape e gli altri programmi. Percorsi dei collegamenti e larghezze dei testi
+  // si leggono dalla tela, dove sono già calcolati.
+  function buildSvg(withBackground) {
+    if (!model.entities.length && !model.associations.length) return null;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    const grow = (x1, y1, x2, y2) => {
+      minX = Math.min(minX, x1); minY = Math.min(minY, y1);
+      maxX = Math.max(maxX, x2); maxY = Math.max(maxY, y2);
+    };
+    const out = [];
+    const line = 'stroke="#000" stroke-width="1.5"';
+
+    $('#links .link').each(function () {
+      ['line', 'foot'].forEach(c => {
+        const $p = $(this).find('.' + c);
+        if (!$p.length) return;
+        const bb = $p[0].getBBox();
+        grow(bb.x, bb.y, bb.x + bb.width, bb.y + bb.height);
+        out.push('<path d="' + $p.attr('d') + '" fill="none" ' + line + ' stroke-linecap="round"/>');
+      });
+    });
+
+    $('#attrlines .aline').each(function () {
+      const a = $(this);
+      out.push('<line x1="' + a.attr('x1') + '" y1="' + a.attr('y1') + '" x2="' + a.attr('x2') + '" y2="' + a.attr('y2') +
+               '" stroke="#000" stroke-width="1.2"/>');
+    });
+
+    model.entities.forEach(e => {
+      const z = sizes[e.id], x = e.x - z.w / 2, y = e.y - z.h / 2;
+      grow(x, y, x + z.w, y + z.h);
+      out.push('<rect x="' + x + '" y="' + y + '" width="' + z.w + '" height="' + z.h + '" fill="#fff" ' + line + '/>');
+      out.push(textEl(e.x, e.y, e.name, 'middle'));
+    });
+
+    model.associations.forEach(a => {
+      const z = sizes[a.id];
+      grow(a.x - z.w / 2, a.y - z.h / 2, a.x + z.w / 2, a.y + z.h / 2);
+      out.push('<polygon points="' + a.x + ',' + (a.y - z.h / 2) + ' ' + (a.x + z.w / 2) + ',' + a.y + ' ' +
+               a.x + ',' + (a.y + z.h / 2) + ' ' + (a.x - z.w / 2) + ',' + a.y + '" fill="#fff" ' + line + '/>');
+      out.push(textEl(a.x, a.y, a.name, 'middle'));
+    });
+
+    model.attributes.forEach(t => {
+      if (!ownerOf(t.owner) || !attrVisible(t)) return;     // l'esportazione segue ciò che si vede
+      const p = attrPos(t);
+      const tw = $('#attrs .attr[data-id="' + t.id + '"] text')[0].getBBox().width;
+      const left = t.dx < 0;                                // attributo a sinistra: etichetta a sinistra del pallino
+      const lx = left ? p.x - 12 : p.x + 12;
+      grow(left ? p.x - 14 - tw : p.x - 6, p.y - 12, left ? p.x + 6 : p.x + 14 + tw, p.y + 12);
+      out.push('<circle cx="' + p.x + '" cy="' + p.y + '" r="5" fill="' + (t.pk ? '#000' : '#fff') + '" ' + line + '/>');
+      out.push(textEl(lx, p.y, t.name, left ? 'end' : 'start'));
+      if (t.pk) {                                      // identificatore: nome sottolineato
+        out.push('<line x1="' + (left ? lx - tw : lx) + '" y1="' + (p.y + 9) + '" x2="' + (left ? lx : lx + tw) + '" y2="' + (p.y + 9) +
+                 '" stroke="#000" stroke-width="1.2"/>');
+      }
+    });
+
+    const pad = 20;
+    const x0 = Math.floor(minX - pad), y0 = Math.floor(minY - pad);
+    const w = Math.ceil(maxX + pad) - x0, h = Math.ceil(maxY + pad) - y0;
+    return '<?xml version="1.0" encoding="UTF-8"?>\n' +
+      '<svg xmlns="http://www.w3.org/2000/svg" width="' + w + '" height="' + h + '" viewBox="' + x0 + ' ' + y0 + ' ' + w + ' ' + h + '">\n' +
+      (withBackground ? '<rect x="' + x0 + '" y="' + y0 + '" width="' + w + '" height="' + h + '" fill="#fff"/>\n' : '') +
+      out.join('\n') + '\n</svg>\n';
+  }
+
+  function exportSvg() {
+    const text = buildSvg(false);
+    if (!text) { $('#hint').text('Il diagramma è vuoto: non c\u2019è niente da esportare.'); return; }
+    download('diagramma-er.svg', new Blob([text], { type: 'image/svg+xml' }));
+  }
+
+  function exportPng() {
+    const text = buildSvg(true);                       // sfondo bianco, il PNG non ha trasparenza utile
+    if (!text) { $('#hint').text('Il diagramma è vuoto: non c\u2019è niente da esportare.'); return; }
+    const img = new Image();
+    img.onload = function () {
+      const scale = 2;                                 // doppia risoluzione
+      const c = document.createElement('canvas');
+      c.width = img.naturalWidth * scale;
+      c.height = img.naturalHeight * scale;
+      const ctx = c.getContext('2d');
+      ctx.scale(scale, scale);
+      ctx.drawImage(img, 0, 0);
+      c.toBlob(b => download('diagramma-er.png', b), 'image/png');
+    };
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(text);
+  }
+
+  $('#btnUndo').on('click', undo);
+  $('#btnRedo').on('click', redo);
+  $('#btnOpen').on('click', function () { $('#fileOpen')[0].click(); });
+  $('#btnSave').on('click', saveJson);
+  $('#btnSvg').on('click', exportSvg);
+  $('#btnPng').on('click', exportPng);
+
+  // ============================================================
+  //  ASSOCIAZIONE RICORSIVA
+  // ============================================================
+  // crea un'associazione a destra dell'entità e la collega due volte alla stessa entità
+  // (i due collegamenti vengono disegnati come archi affiancati)
+  function addRecursive(entityId) {
+    const e = find('entity', entityId);
+    const a = {
+      id: newId('a', model.associations),
+      name: uniqueName('association'),
+      x: e.x + Math.ceil((sizes[entityId].w / 2 + 160) / GRID) * GRID,
+      y: e.y
+    };
+    model.associations.push(a);
+    for (let i = 0; i < 2; i++) {
+      model.links.push({ id: newId('l', model.links), entity: entityId, assoc: a.id, many: false });
+    }
+    setAddMode(null);                        // un'associazione ricorsiva alla volta
+    render();
+    select('association', a.id);
+    startRename('association', a.id);        // si scrive subito il nome
+    pushHistory();
+  }
+
+  // ============================================================
+  //  ZOOM E SPOSTAMENTO DELLA TELA
+  // ============================================================
+  // La vista non fa parte del modello: non finisce nel salvataggio né nella cronologia.
+  // Si realizza con il viewBox dell'SVG, quindi coordinate, griglia ed esportazioni non cambiano.
+  const ZOOM_MIN = 0.25, ZOOM_MAX = 3;
+  const view = { x: 0, y: 0, k: 1 };      // x, y = angolo in alto a sinistra (coordinate del modello), k = ingrandimento
+  let pan = null;
+
+  function applyView() {
+    const r = svg.getBoundingClientRect();
+    const w = r.width / view.k, h = r.height / view.k;
+    svg.setAttribute('viewBox', view.x + ' ' + view.y + ' ' + w + ' ' + h);
+    $('#gridrect').attr({ x: view.x, y: view.y, width: w, height: h });
+    $('#btnZoomReset').text(Math.round(view.k * 100) + '%');
+  }
+
+  // (cx, cy) = punto che resta fermo sullo schermo, in pixel relativi alla tela
+  function zoomAt(k, cx, cy) {
+    k = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, k));
+    const mx = view.x + cx / view.k, my = view.y + cy / view.k;     // punto del modello sotto (cx, cy)
+    view.k = k;
+    view.x = mx - cx / k;
+    view.y = my - cy / k;
+    applyView();
+  }
+
+  function zoomCenter(k) {
+    endRename(true);
+    const r = svg.getBoundingClientRect();
+    zoomAt(k, r.width / 2, r.height / 2);
+  }
+
+  // rettangolo che contiene tutto il diagramma (coordinate del modello), null se è vuoto
+  function contentBounds() {
+    let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+    ['#links', '#attrlines', '#attrs', '#layer'].forEach(sel => {
+      const g = $(sel)[0];
+      if (!g.childNodes.length) return;
+      const b = g.getBBox();
+      x1 = Math.min(x1, b.x);           y1 = Math.min(y1, b.y);
+      x2 = Math.max(x2, b.x + b.width); y2 = Math.max(y2, b.y + b.height);
+    });
+    return x1 === Infinity ? null : { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
+  }
+
+  // mostra tutto il diagramma, al massimo al 100%
+  function fitView() {
+    endRename(true);
+    const b = contentBounds();
+    const r = svg.getBoundingClientRect();
+    if (!b) {
+      view.x = 0; view.y = 0; view.k = 1;
+    } else {
+      const pad = 40;
+      view.k = Math.min(1, Math.max(ZOOM_MIN, Math.min(r.width / (b.w + 2 * pad), r.height / (b.h + 2 * pad))));
+      view.x = b.x + b.w / 2 - r.width / (2 * view.k);
+      view.y = b.y + b.h / 2 - r.height / (2 * view.k);
+    }
+    applyView();
+  }
+
+  // rotella: con Ctrl/Cmd (o il pizzico sul trackpad) zoom sul puntatore, altrimenti sposta la vista
+  svg.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    endRename(true);
+    const r = svg.getBoundingClientRect();
+    let dx = e.deltaX, dy = e.deltaY;
+    if (e.deltaMode === 1) { dx *= 33; dy *= 33; }                  // Firefox: spostamento in righe
+    if (e.ctrlKey || e.metaKey) {
+      zoomAt(view.k * Math.exp(-dy * 0.002), e.clientX - r.left, e.clientY - r.top);
+    } else {
+      if (e.shiftKey && !dx) { dx = dy; dy = 0; }                   // Maiusc+rotella: spostamento orizzontale
+      view.x += dx / view.k;
+      view.y += dy / view.k;
+      applyView();
+    }
+  }, { passive: false });
+
+  // trascinamento dello sfondo vuoto
+  function startPan(e) {
+    pan = { sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y };
+    $svg.addClass('panning');
+    e.preventDefault();
+  }
+
+  $(document).on('mousemove', function (e) {
+    if (!pan) return;
+    view.x = pan.vx - (e.clientX - pan.sx) / view.k;
+    view.y = pan.vy - (e.clientY - pan.sy) / view.k;
+    applyView();
+  });
+
+  $(document).on('mouseup', function () {
+    if (!pan) return;
+    pan = null;
+    $svg.removeClass('panning');
+  });
+
+  $('#btnZoomIn').on('click',    function () { zoomCenter(view.k * 1.25); });
+  $('#btnZoomOut').on('click',   function () { zoomCenter(view.k / 1.25); });
+  $('#btnZoomReset').on('click', function () { zoomCenter(1); });
+  $('#btnFit').on('click', fitView);
+  // la tela segue ogni cambio di dimensione (finestra, barra degli strumenti che va a capo)
+  new ResizeObserver(applyView).observe($('#stage')[0]);
+
+  // il testo completo del messaggio resta leggibile passandoci sopra il mouse, anche se troncato
+  new MutationObserver(function () { $('#hint').attr('title', $('#hint').text()); })
+    .observe($('#hint')[0], { childList: true, characterData: true, subtree: true });
+
+  // ============================================================
+  //  VISIBILITÀ DEGLI ATTRIBUTI
+  // ============================================================
+  // Solo vista: non entra nel modello, nel salvataggio né nella cronologia.
+  // L'esportazione SVG/PNG segue ciò che si vede.
+  let attrView = 'all';                      // 'all' = tutti, 'pk' = solo identificatori, 'none' = nessuno
+
+  function attrVisible(t) { return attrView === 'all' || (attrView === 'pk' && t.pk); }
+
+  function setAttrView(mode) {
+    attrView = mode;
+    $('#selAttrs').val(mode);
+    endRename(true);
+    if (selected && selected.kind === 'attribute') {     // un attributo nascosto non può restare selezionato
+      const t = find('attribute', selected.id);
+      if (!t || !attrVisible(t)) selected = null;
+    }
+    render();
+  }
+
+  $('#selAttrs').on('change', function () {
+    setAttrView(this.value);
+    this.blur();                             // i tasti (Canc, Ctrl+Z) tornano a funzionare sul diagramma
+  });
+
+  // ============================================================
+  //  RIBALTA ATTRIBUTI
+  // ============================================================
+  // elemento a cui si applica il ribaltamento: quello selezionato, o il proprietario dell'attributo selezionato
+  function flipOwner() {
+    if (!selected || selected.kind === 'link') return null;
+    if (selected.kind === 'attribute') {
+      const t = find('attribute', selected.id);
+      return t ? t.owner : null;
+    }
+    return selected.id;
+  }
+
+  // specchia gli attributi dell'elemento (anche quelli nascosti): lo scostamento orizzontale cambia segno,
+  // quello verticale resta; il lato dell'etichetta segue da solo
+  function flipAttrs() {
+    const ownerId = flipOwner();
+    if (!ownerId) return;
+    const mine = model.attributes.filter(t => t.owner === ownerId);
+    if (!mine.length) return;
+    mine.forEach(t => { t.dx = -t.dx; });
+    render();
+    pushHistory();
+  }
+
+  $('#btnFlip').on('click', flipAttrs);
+
+  // ============================================================
+  //  AVVIO
+  // ============================================================
+  setAddMode(null);
+  applyView();
+  render();
+  updateHistoryButtons();
+});
+</script>
+</body>
+</html>
