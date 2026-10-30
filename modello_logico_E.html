@@ -1,0 +1,832 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Generatore Modello Logico e SQL</title>
+<style>
+  :root {
+    --carta: #fbfbf9;
+    --linea: #22262b;
+    --barra: #eef0f2;
+    --bordo: #c9cdd2;
+    --accento: #1f5fbf;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex; flex-direction: column;
+    font: 14px/1.3 'Segoe UI', Helvetica, Arial, sans-serif;
+    color: var(--linea); background: var(--carta);
+  }
+
+  /* barra degli strumenti */
+  #toolbar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    padding: 8px 12px; background: var(--barra); border-bottom: 1px solid var(--bordo);
+  }
+  #toolbar button {
+    font: inherit; padding: 6px 12px; cursor: pointer;
+    border: 1px solid var(--bordo); border-radius: 4px; background: #fff; color: var(--linea);
+  }
+  #toolbar button:hover:not(:disabled) { border-color: var(--linea); }
+  #toolbar button:disabled { opacity: .45; cursor: default; }
+  #toolbar button:focus-visible { outline: 2px solid var(--accento); outline-offset: 2px; }
+  #toolbar button.primary { background: var(--accento); border-color: var(--accento); color: #fff; }
+  #toolbar .sep { width: 1px; align-self: stretch; margin: 0 4px; background: var(--bordo); }
+  #toolbar .seg { display: inline-flex; }
+  #toolbar .seg button { border-radius: 0; margin-left: -1px; }
+  #toolbar .seg button:first-child { border-radius: 4px 0 0 4px; margin-left: 0; }
+  #toolbar .seg button:last-child { border-radius: 0 4px 4px 0; }
+  #toolbar .seg button.active { background: var(--accento); border-color: var(--accento); color: #fff; }
+  #toolbar #btnZoomReset { min-width: 4.4em; }
+  #zoomGroup { display: inline-flex; align-items: center; gap: 8px; }
+
+  /* avvisi ed errori */
+  #messages {
+    flex: none; max-height: 30%; overflow: auto; padding: 8px 12px;
+    background: #fff8e1; border-bottom: 1px solid #e5c97a; color: #5c4400;
+  }
+  #messages.error { background: #fef2f2; border-bottom-color: #ef4444; color: #8a1c1c; }
+  #messages[hidden] { display: none; }
+  #messages ul { margin: 4px 0 0; padding-left: 20px; }
+  #messages .head { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-weight: 600; }
+  #messages button { font: inherit; border: 1px solid currentColor; background: transparent; color: inherit; border-radius: 4px; padding: 2px 8px; cursor: pointer; }
+
+  /* area di lavoro */
+  #stage { position: relative; flex: 1; min-height: 0; overflow: hidden; background: #fff; }
+  #canvas { display: block; width: 100%; height: 100%; cursor: grab; background: #fff; }
+  #canvas.panning { cursor: grabbing; }
+  #placeholder {
+    position: absolute; top: 16px; right: 16px; bottom: 16px; left: 16px;
+    display: flex; align-items: center; justify-content: center; text-align: center; padding: 20px;
+    border: 2px dashed var(--bordo); border-radius: 10px; color: #5b626a; font-size: 16px; pointer-events: none;
+  }
+  #stage.drop #placeholder { border-color: var(--accento); color: var(--accento); background: #eef4ff; }
+  #sql {
+    position: absolute; top: 0; right: 0; bottom: 0; left: 0; margin: 0; padding: 20px; overflow: auto;
+    background: #0f172a; color: #38bdf8; font: 14px/1.5 'Fira Code', 'Courier New', monospace; white-space: pre;
+  }
+
+  /* barra di stato: altezza fissa, una sola riga */
+  #statusbar {
+    flex: none; display: flex; align-items: center; height: 30px; padding: 0 12px;
+    background: var(--barra); border-top: 1px solid var(--bordo);
+  }
+  #hint { color: #5b626a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <button id="btnOpen" type="button" class="primary">Apri JSON</button>
+  <input type="file" id="fileInput" accept=".json,application/json" hidden>
+  <span class="sep"></span>
+  <span class="seg">
+    <button id="tabDiagram" type="button" class="active">Diagramma</button>
+    <button id="tabSql" type="button">SQL</button>
+  </span>
+  <span class="sep"></span>
+  <button id="btnSvg" type="button" disabled>Scarica SVG</button>
+  <button id="btnPng" type="button" disabled>Scarica PNG</button>
+  <button id="btnSqlFile" type="button" disabled>Scarica SQL</button>
+  <button id="btnCopy" type="button" disabled>Copia SQL</button>
+  <span id="zoomGroup">
+    <span class="sep"></span>
+    <button id="btnZoomOut" type="button" title="Riduci" aria-label="Riduci">&minus;</button>
+    <button id="btnZoomReset" type="button" title="Torna al 100%">100%</button>
+    <button id="btnZoomIn" type="button" title="Ingrandisci" aria-label="Ingrandisci">+</button>
+    <button id="btnFit" type="button" title="Mostra tutto il diagramma">Adatta</button>
+  </span>
+</div>
+
+<div id="messages" hidden></div>
+
+<div id="stage">
+  <svg id="canvas" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMinYMin meet"
+       font-family="'Segoe UI', Helvetica, Arial, sans-serif"></svg>
+  <div id="placeholder">Trascina qui il file JSON dell&rsquo;editor ER oppure usa &laquo;Apri JSON&raquo;</div>
+  <pre id="sql" hidden></pre>
+</div>
+
+<div id="statusbar"><span id="hint">Trascina per spostare. Rotella per scorrere. Ctrl o Cmd e rotella per lo zoom.</span></div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ============================================================
+  //  CONFIGURAZIONE DEI TIPI
+  // ============================================================
+  // I nomi vengono spezzati in parole (dataNascita e data_nascita danno "data" + "nascita") e le
+  // parole intere vengono confrontate con l'elenco: "database" o "update" NON sono una data.
+  // Si usa la prima regola che corrisponde, quindi l'ordine è la precedenza:
+  // id, data, quantità, importi. "exact": nomi composti solo da quella parola (q, n).
+  const DEFAULT_TYPE = 'VARCHAR(255)';
+  const MONEY_TYPE   = 'DECIMAL(10,2)';          // scrivi 'FLOAT' se preferisci
+  const TYPE_RULES = [
+    { type: 'INT',      words: ['id'] },
+    { type: 'DATE',     words: ['data', 'date'] },
+    { type: 'INT',      words: ['quantita', 'quantity', 'eta', 'age'], exact: ['q', 'n'] },
+    { type: MONEY_TYPE, words: ['prezzo', 'price', 'totale', 'total'] }
+  ];
+
+  // parole riservate SQL più comuni: si avvisa, non si rinomina
+  const RESERVED = ['order', 'group', 'table', 'select', 'from', 'where', 'key', 'index', 'primary', 'foreign',
+    'references', 'check', 'default', 'values', 'desc', 'asc', 'union', 'join', 'like', 'limit', 'insert',
+    'update', 'delete', 'create', 'drop', 'alter', 'by', 'and', 'or', 'not', 'null', 'in', 'is', 'on', 'as', 'set'];
+
+  function words(name) {
+    return String(name)
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/([a-z])([A-Z])/g, '$1 $2')
+      .replace(/([A-Za-z])([0-9])/g, '$1 $2').replace(/([0-9])([A-Za-z])/g, '$1 $2')
+      .replace(/[^A-Za-z0-9]+/g, ' ')
+      .trim().toLowerCase().split(/\s+/).filter(Boolean);
+  }
+
+  function guessType(name) {
+    const w = words(name);
+    for (let i = 0; i < TYPE_RULES.length; i++) {
+      const r = TYPE_RULES[i];
+      if (r.exact && w.length === 1 && r.exact.indexOf(w[0]) !== -1) return r.type;
+      if (r.words && w.some(x => r.words.indexOf(x) !== -1)) return r.type;
+    }
+    return DEFAULT_TYPE;
+  }
+
+  // nome da identificatore: id, id_classe, classeId...
+  function isIdName(name) {
+    const w = words(name);
+    return w.length > 0 && (w[0] === 'id' || w[w.length - 1] === 'id');
+  }
+
+  // nome valido in SQL: niente accenti, spazi o simboli
+  function ident(s) {
+    let t = String(s == null ? '' : s).normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!t) t = 'x';
+    if (/^[0-9]/.test(t)) t = '_' + t;
+    return t;
+  }
+
+  function esc(v) {
+    return String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  // ============================================================
+  //  TRADUZIONE ER -> MODELLO LOGICO
+  // ============================================================
+  // Una tabella: { name, kind: 'entity' | 'assoc', cols: [...], fks: [...] }
+  // Una colonna: { name, type, pk, fk, assoc, unique, auto }
+  // Una FK:      { cols: [nomi], ref: tabella, refCols: [nomi], unique }
+  function translate(data) {
+    const warnings = [];
+    const warn = m => { if (warnings.indexOf(m) === -1) warnings.push(m); };
+    const used = Object.create(null);
+    const tables = [];
+
+    function reserved(name, what) {
+      if (RESERVED.indexOf(name.toLowerCase()) !== -1) {
+        warn(what + ' «' + name + '» è una parola riservata SQL: potrebbe non funzionare.');
+      }
+    }
+
+    function newTable(raw, kind, what) {
+      const base = ident(raw);
+      if (base !== String(raw)) warn(what + ' «' + raw + '» diventa «' + base + '» (caratteri non validi in SQL).');
+      let name = base, n = 2;
+      while (used[name.toLowerCase()]) name = base + '_' + n++;
+      if (name !== base) warn(what + ' «' + raw + '»: nome già usato, diventa «' + name + '».');
+      used[name.toLowerCase()] = true;
+      reserved(name, what);
+      const t = { name: name, kind: kind, cols: [], fks: [] };
+      tables.push(t);
+      return t;
+    }
+
+    const hasCol = (t, name) => t.cols.some(c => c.name.toLowerCase() === name.toLowerCase());
+
+    function addCol(t, raw, props) {
+      const base = ident(raw);
+      if (base !== String(raw)) warn('Colonna «' + raw + '» di «' + t.name + '» diventa «' + base + '».');
+      let name = base, n = 2;
+      while (hasCol(t, name)) name = base + '_' + n++;
+      if (name !== base) warn('Colonna «' + raw + '» di «' + t.name + '»: nome già usato, diventa «' + name + '».');
+      reserved(name, 'La colonna');
+      const c = Object.assign({ name: name, type: DEFAULT_TYPE, pk: false, fk: false, assoc: false, unique: false, auto: false }, props);
+      t.cols.push(c);
+      return c;
+    }
+
+    // --- entità e attributi ---
+    const ents = Object.create(null);
+    data.entities.forEach(e => {
+      if (e && typeof e.id === 'string') ents[e.id] = newTable(e.name, 'entity', 'L\u2019entità');
+    });
+
+    const assocs = Object.create(null);
+    (data.associations || []).forEach(a => {
+      if (a && typeof a.id === 'string') assocs[a.id] = { name: a.name, links: [], attrs: [] };
+    });
+
+    (data.attributes || []).forEach(at => {
+      if (!at) return;
+      const t = ents[at.owner];
+      if (t) {
+        const pure = words(at.name).join('') === 'id';           // esattamente "id"
+        const name = (at.pk && pure) ? 'id_' + t.name : at.name;   // id diventa id_<tabella>
+        addCol(t, name, { pk: !!at.pk, type: (at.pk && isIdName(at.name)) ? 'INT' : guessType(at.name) });
+      } else if (assocs[at.owner]) {
+        assocs[at.owner].attrs.push(at.name);
+      }
+    });
+
+    Object.keys(ents).forEach(id => {
+      const t = ents[id];
+      const pks = t.cols.filter(c => c.pk);
+      if (pks.length === 1 && pks[0].type === 'INT' && isIdName(pks[0].name)) pks[0].auto = true;
+      if (!pks.length) warn('L\u2019entità «' + t.name + '» non ha un identificatore: nessuna chiave primaria e nessuna FK potrà puntare a lei.');
+    });
+
+    (data.links || []).forEach(l => {
+      if (l && assocs[l.assoc] && ents[l.entity]) {
+        assocs[l.assoc].links.push({ ent: ents[l.entity], many: l.many === true || l.many === 'true' });
+      }
+    });
+
+    // --- chiavi esterne ---
+    // La FK ha il nome della chiave primaria a cui punta (id_classe). Se il nome esiste già nella
+    // tabella (due FK verso la stessa tabella, associazione ricorsiva) si aggiunge il nome dell'associazione.
+    function addFk(dst, target, assocRaw, o) {
+      o = o || {};
+      const pks = target.cols.filter(c => c.pk);
+      const tag = o.tag ? '_' + o.tag : '';
+      let names = pks.map(c => c.name + tag);
+      if (names.some(n => hasCol(dst, n))) names = pks.map(c => c.name + '_' + ident(assocRaw) + tag);
+      const cols = [];
+      pks.forEach((p, i) => {
+        let name = names[i], k = 2;
+        while (hasCol(dst, name)) name = names[i] + '_' + k++;
+        dst.cols.push({ name: name, type: p.type, pk: !!o.asPk, fk: true, assoc: false, unique: !!o.unique, auto: false });
+        cols.push(name);
+      });
+      const fk = { cols: cols, ref: target, refCols: pks.map(c => c.name), unique: !!o.unique };
+      dst.fks.push(fk);
+      return fk;
+    }
+
+    function addAssocAttrs(t, a) {
+      a.attrs.forEach(raw => addCol(t, raw, { assoc: true, type: guessType(raw) }));
+    }
+
+    // tabella di associazione (N:M, o associazione tra tre o più entità)
+    function bridge(a) {
+      const bt = newTable(a.name, 'assoc', 'L\u2019associazione');
+      const count = {}, seen = {}, parts = [];
+      a.links.forEach(l => { count[l.ent.name] = (count[l.ent.name] || 0) + 1; });
+      a.links.forEach(l => {
+        seen[l.ent.name] = (seen[l.ent.name] || 0) + 1;
+        const tag = count[l.ent.name] > 1 ? String(seen[l.ent.name]) : '';   // stessa entità più volte (ricorsiva)
+        parts.push({ fk: addFk(bt, l.ent, a.name, { tag: tag }), many: l.many });
+      });
+      let key = parts.filter(p => p.many);
+      if (a.links.length === 2 || !key.length) key = parts;                  // N:M: tutte le FK; altrimenti quelle dei lati N
+      key.forEach(p => p.fk.cols.forEach(cn => { bt.cols.find(c => c.name === cn).pk = true; }));
+      addAssocAttrs(bt, a);
+      if (a.links.length > 2) {
+        warn('Associazione «' + a.name + '» tra ' + a.links.length + ' entità: tabella con una FK per entità, chiave primaria sulle FK dei lati N.');
+      }
+    }
+
+    Object.keys(assocs).forEach(id => {
+      const a = assocs[id];
+      if (a.links.length < 2) {
+        warn('Associazione «' + a.name + '»: servono almeno due collegamenti (ne ha ' + a.links.length + '), non è stata tradotta.');
+        return;
+      }
+      const noKey = a.links.find(l => !l.ent.cols.some(c => c.pk));
+      if (noKey) {
+        warn('Associazione «' + a.name + '» non tradotta: l\u2019entità «' + noKey.ent.name + '» non ha un identificatore.');
+        return;
+      }
+      if (a.links.length === 2) {
+        const l1 = a.links[0], l2 = a.links[1];
+        if (l1.many !== l2.many) {                                   // 1:N: la FK va nel lato N
+          const many = l1.many ? l1 : l2, one = l1.many ? l2 : l1;
+          addFk(many.ent, one.ent, a.name);
+          addAssocAttrs(many.ent, a);
+        } else if (!l1.many) {                                       // 1:1: FK (UNIQUE) nella seconda entità
+          addFk(l2.ent, l1.ent, a.name, { unique: true });
+          addAssocAttrs(l2.ent, a);
+          warn('Associazione 1:1 «' + a.name + '»: la FK (UNIQUE) è in «' + l2.ent.name + '», verso «' + l1.ent.name + '».');
+        } else {
+          bridge(a);                                                 // N:M
+        }
+      } else {
+        bridge(a);
+      }
+    });
+
+    return { tables: tables, warnings: warnings };
+  }
+
+  // ordine delle colonne: chiavi primarie, campi, chiavi esterne, attributi delle associazioni
+  function orderedCols(t) {
+    return [].concat(
+      t.cols.filter(c => c.pk),
+      t.cols.filter(c => !c.pk && !c.fk && !c.assoc),
+      t.cols.filter(c => !c.pk && c.fk),
+      t.cols.filter(c => !c.pk && !c.fk && c.assoc)
+    );
+  }
+
+  // ============================================================
+  //  SQL
+  // ============================================================
+  function genSql(tables, warn) {
+    // le tabelle referenziate vengono create prima di quelle che le referenziano
+    const done = new Set(), order = [], deferred = [];
+    let rest = tables.slice();
+    while (rest.length) {
+      let ready = rest.filter(t => t.fks.every(f => f.ref === t || done.has(f.ref)));
+      let cyclic = false;
+      if (!ready.length) { ready = [rest[0]]; cyclic = true; }       // riferimento circolare: si spezza qui
+      ready.forEach(t => {
+        const inline = [];
+        t.fks.forEach(f => {
+          if (f.ref === t || done.has(f.ref)) inline.push(f);
+          else deferred.push({ t: t, f: f });
+        });
+        order.push({ t: t, inline: inline });
+      });
+      ready.forEach(t => done.add(t));
+      rest = rest.filter(t => ready.indexOf(t) === -1);
+      if (cyclic) warn('Riferimenti circolari tra le tabelle: le FK interessate sono aggiunte in fondo con ALTER TABLE.');
+    }
+
+    const fkSql = f => 'FOREIGN KEY (' + f.cols.join(', ') + ') REFERENCES ' + f.ref.name + '(' + f.refCols.join(', ') + ')' +
+                       ' ON DELETE CASCADE ON UPDATE CASCADE';
+
+    let sql = '';
+    order.forEach(o => {
+      const t = o.t;
+      const cols = orderedCols(t);
+      if (!cols.length) {
+        sql += '-- La tabella ' + t.name + ' non ha colonne: non creata.\n\n';
+        warn('La tabella «' + t.name + '» non ha colonne: non è stata creata in SQL.');
+        return;
+      }
+      const lines = cols.map(c => '    ' + c.name + ' ' + c.type + ' NOT NULL' + (c.auto ? ' AUTO_INCREMENT' : ''));
+      const pk = cols.filter(c => c.pk).map(c => c.name);
+      if (pk.length) lines.push('    PRIMARY KEY (' + pk.join(', ') + ')');
+      t.fks.filter(f => f.unique).forEach(f => lines.push('    UNIQUE (' + f.cols.join(', ') + ')'));
+      o.inline.forEach(f => lines.push('    ' + fkSql(f)));
+      sql += 'CREATE TABLE ' + t.name + ' (\n' + lines.join(',\n') + '\n);\n\n';
+    });
+    deferred.forEach(d => {
+      sql += 'ALTER TABLE ' + d.t.name + '\n    ADD ' + fkSql(d.f) + ';\n\n';
+    });
+    return sql.trim() + '\n';
+  }
+
+  // ============================================================
+  //  DIAGRAMMA (SVG)
+  // ============================================================
+  // Restituisce { inner, bounds }: il contenuto SVG e il rettangolo che contiene TUTTO ciò che è
+  // disegnato (schede, linee, frecce, etichette). Le dimensioni del disegno e dell'SVG scaricato
+  // si ricavano da lì, quindi niente può essere tagliato.
+  function buildDiagram(tables) {
+    const gap = 150, headerH = 42, rowH = 30, topY = 40, sideMargin = gap;
+
+    // larghezza comune delle schede: abbastanza per il nome più lungo, il tipo e il badge
+    let need = 330;
+    tables.forEach(t => {
+      need = Math.max(need, 24 + t.name.length * 9.2);
+      t.cols.forEach(c => { need = Math.max(need, 12 + c.name.length * 7.8 + 8 + 140); });
+    });
+    const cardW = Math.ceil(need / 10) * 10;
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    const grow = (x1, y1, x2, y2) => {
+      minX = Math.min(minX, x1); minY = Math.min(minY, y1);
+      maxX = Math.max(maxX, x2); maxY = Math.max(maxY, y2);
+    };
+
+    const nat = tables.filter(t => t.kind === 'entity');
+    const bri = tables.filter(t => t.kind === 'assoc');
+    const heightOf = t => headerH + Math.max(1, orderedCols(t).length) * rowH;
+
+    // ordine delle tabelle "native": prima le referenziate; le destinazioni delle tabelle ponte agli estremi
+    let natOrder = nat.slice();
+    if (nat.length > 1) {
+      const deps = new Map();
+      nat.forEach(t => deps.set(t, new Set(t.fks.map(f => f.ref).filter(r => r !== t && nat.indexOf(r) !== -1))));
+      const ordered = [], placed = new Set();
+      while (ordered.length < nat.length) {
+        const ready = nat.filter(t => !placed.has(t) && Array.from(deps.get(t)).every(d => placed.has(d)));
+        if (!ready.length) { nat.forEach(t => { if (!placed.has(t)) { placed.add(t); ordered.push(t); } }); break; }
+        ready.forEach(t => { placed.add(t); ordered.push(t); });
+      }
+      const dests = new Set();
+      bri.forEach(b => b.fks.forEach(f => dests.add(f.ref)));
+      const destIn = ordered.filter(t => dests.has(t));
+      const others = ordered.filter(t => !dests.has(t));
+      const half = Math.ceil(destIn.length / 2);
+      natOrder = [].concat(destIn.slice(0, half), others, destIn.slice(half).reverse());
+    }
+
+    const coords = new Map();
+    natOrder.forEach((t, i) => {
+      coords.set(t, { x: sideMargin + i * (cardW + gap), y: topY, w: cardW, h: heightOf(t), rowY: {} });
+    });
+    const natBottom = natOrder.reduce((m, t) => Math.max(m, coords.get(t).y + coords.get(t).h), topY);
+    const bridgeY = natBottom + gap / 2;
+
+    // tabelle ponte: centrate tra le entità che collegano, in una fila, senza sovrapporsi
+    const plan = bri.map(b => {
+      const cs = b.fks.map(f => coords.get(f.ref)).filter(Boolean).map(c => c.x + cardW / 2);
+      const cx = cs.length ? (Math.min.apply(null, cs) + Math.max.apply(null, cs)) / 2 : sideMargin + cardW / 2;
+      return { b: b, want: cx - cardW / 2 };
+    }).sort((p, q) => p.want - q.want);
+    let prevRight = -Infinity;
+    plan.forEach(p => {
+      const x = Math.max(p.want, prevRight + 40);
+      coords.set(p.b, { x: x, y: bridgeY, w: cardW, h: heightOf(p.b), rowY: {} });
+      prevRight = x + cardW;
+    });
+
+    // --- schede ---
+    const fillOf = { pk: '#fff5cc', fk: '#e5f5eb', assoc: '#f6eefd', std: '#fff' };
+    let body = '';
+    natOrder.concat(bri).forEach(t => {
+      const c = coords.get(t), x = c.x, y = c.y, w = c.w, h = c.h;
+      grow(x, y, x + w, y + h);
+      body += '<rect x="' + x + '" y="' + y + '" width="' + w + '" height="' + h + '" rx="5" fill="#fff" stroke="#52647a" stroke-width="1.7"/>';
+      body += '<path d="M ' + (x + 5) + ' ' + y + ' H ' + (x + w - 5) + ' Q ' + (x + w) + ' ' + y + ' ' + (x + w) + ' ' + (y + 5) +
+              ' V ' + (y + headerH) + ' H ' + x + ' V ' + (y + 5) + ' Q ' + x + ' ' + y + ' ' + (x + 5) + ' ' + y + ' Z" fill="#e2eaf5"/>';
+      body += '<text x="' + (x + 12) + '" y="' + (y + headerH / 2) + '" font-size="15" font-weight="700" fill="#172b4d" dominant-baseline="middle">' + esc(t.name) + '</text>';
+      let cy = y + headerH;
+      const rows = orderedCols(t);
+      if (!rows.length) {
+        body += '<text x="' + (x + 12) + '" y="' + (cy + rowH / 2) + '" font-size="13" font-style="italic" fill="#64748b" dominant-baseline="middle">(nessuna colonna)</text>';
+      }
+      rows.forEach(col => {
+        const mid = cy + rowH / 2;
+        c.rowY[col.name] = mid;
+        const kind = col.pk ? 'pk' : (col.fk ? 'fk' : (col.assoc ? 'assoc' : 'std'));
+        body += '<rect x="' + (x + 1) + '" y="' + cy + '" width="' + (w - 2) + '" height="' + rowH + '" fill="' + fillOf[kind] + '"/>';
+        body += '<line x1="' + x + '" y1="' + cy + '" x2="' + (x + w) + '" y2="' + cy + '" stroke="#e2e8f0" stroke-width="1"/>';
+        const style = kind === 'assoc' ? ' font-style="italic" font-weight="500" fill="#7a3baf"'
+                    : (kind === 'pk' ? ' font-weight="700" fill="#172b4d"' : ' font-weight="500" fill="#172b4d"');
+        body += '<text x="' + (x + 12) + '" y="' + mid + '" font-size="13"' + style + ' dominant-baseline="middle">' + esc(col.name) + '</text>';
+        body += '<text x="' + (x + w - 140) + '" y="' + mid + '" font-size="11" fill="#64748b" dominant-baseline="middle">' + esc(col.type) + '</text>';
+        const badge = col.pk && col.fk ? 'PK \u00b7 FK' : (col.pk ? 'PK' : (col.fk ? (col.unique ? 'FK \u00b7 UQ' : 'FK') : ''));
+        if (badge) {
+          body += '<text x="' + (x + w - 10) + '" y="' + mid + '" font-size="10" font-weight="700" text-anchor="end" fill="' +
+                  (col.pk ? '#805b00' : '#17603a') + '" dominant-baseline="middle">' + badge + '</text>';
+        }
+        cy += rowH;
+      });
+    });
+
+    // --- collegamenti FK -> PK ---
+    const edges = [];
+    tables.forEach(t => t.fks.forEach(fk => {
+      const src = coords.get(t), dst = coords.get(fk.ref);
+      if (!src || !dst) return;
+      edges.push({
+        src: src, dst: dst, self: src === dst,
+        srcY: src.rowY[fk.cols[0]], dstY: dst.rowY[fk.refCols[0]],
+        label: fk.cols.join(', ') + ' \u2192 ' + fk.refCols.join(', '), names: fk.cols.join(', ')
+      });
+    }));
+
+    const straight = edges.filter(e => !e.self);
+
+    // lato di ingresso alternato per ogni destinazione, passando all'altro lato se la corsia è coperta dalla sorgente
+    const byDst = new Map();
+    straight.forEach(e => { if (!byDst.has(e.dst)) byDst.set(e.dst, []); byDst.get(e.dst).push(e); });
+    byDst.forEach(grp => grp.forEach((e, i) => { e.side = i % 2 === 0 ? 'left' : 'right'; }));
+    straight.forEach(e => {
+      const left  = { x1: e.dst.x - gap, x2: e.dst.x };
+      const right = { x1: e.dst.x + e.dst.w, x2: e.dst.x + e.dst.w + gap };
+      const covered = lane => { const m = (lane.x1 + lane.x2) / 2; return m > e.src.x - 4 && m < e.src.x + e.src.w + 4; };
+      let side = e.side;
+      if (side === 'left' && covered(left)) side = 'right';
+      if (side === 'right' && covered(right)) side = 'left';
+      e.side = side;
+      e.lane = side === 'left' ? left : right;
+    });
+
+    // ogni linea ha la sua x nella corsia
+    const lanes = new Map();
+    straight.forEach(e => {
+      const k = e.side + '@' + e.dst.x;
+      if (!lanes.has(k)) lanes.set(k, []);
+      lanes.get(k).push(e);
+    });
+    lanes.forEach(grp => {
+      const lo = grp[0].lane.x1, hi = grp[0].lane.x2, n = grp.length;
+      const spacing = (hi - lo - 16) / Math.max(n, 1);
+      grp.forEach((e, i) => { e.laneX = lo + 8 + spacing * (i + 0.5); });
+    });
+
+    let lines = '';
+    const labels = [];
+    const arrow = (tipX, y, dir) => {
+      const base = tipX - dir * 8;
+      grow(Math.min(tipX, base), y - 4, Math.max(tipX, base), y + 4);
+      return '<polygon points="' + tipX + ',' + y + ' ' + base + ',' + (y - 4) + ' ' + base + ',' + (y + 4) + '" fill="#2458a6"/>';
+    };
+    const pathSvg = pts => {
+      pts.forEach(p => grow(p[0], p[1], p[0], p[1]));
+      return '<path d="M ' + pts.map(p => p[0] + ' ' + p[1]).join(' L ') + '" fill="none" stroke="#2458a6" stroke-width="1.8" stroke-linejoin="round"/>';
+    };
+
+    straight.forEach(e => {
+      const enterX = e.laneX < e.dst.x + e.dst.w / 2 ? e.dst.x : e.dst.x + e.dst.w;
+      const exitX  = e.laneX < e.src.x + e.src.w / 2 ? e.src.x : e.src.x + e.src.w;
+      lines += pathSvg([[exitX, e.srcY], [e.laneX, e.srcY], [e.laneX, e.dstY], [enterX, e.dstY]]);
+      lines += arrow(enterX > e.laneX ? enterX - 1 : enterX + 1, e.dstY, enterX > e.laneX ? 1 : -1);
+      e.enterX = enterX;
+    });
+    lanes.forEach(grp => {
+      const text = grp.length === 1 ? grp[0].label : grp.map(e => e.names).join(', ');
+      const ys = grp.map(e => e.srcY).concat(grp.map(e => e.dstY));
+      labels.push({
+        cx: grp[0].laneX, text: text,
+        cy: (Math.min.apply(null, grp.map(e => e.srcY)) + Math.min.apply(null, grp.map(e => e.dstY))) / 2,
+        ymin: Math.min.apply(null, ys) + 10, ymax: Math.max.apply(null, ys) - 10
+      });
+    });
+
+    // FK verso la stessa tabella (associazione ricorsiva 1:N): anello sul lato destro
+    const loops = new Map();
+    edges.filter(e => e.self).forEach(e => {
+      const k = loops.get(e.src) || 0;
+      loops.set(e.src, k + 1);
+      const x0 = e.src.x + e.src.w, lx = x0 + 44 + 18 * k;
+      lines += pathSvg([[x0, e.srcY], [lx, e.srcY], [lx, e.dstY], [x0, e.dstY]]);
+      lines += arrow(x0 + 1, e.dstY, -1);
+      labels.push({ cx: lx, text: e.label, cy: (e.srcY + e.dstY) / 2, ymin: Math.min(e.srcY, e.dstY) + 10, ymax: Math.max(e.srcY, e.dstY) - 10 });
+    });
+
+    // etichette sulle corsie: sfondo bianco, spostate lungo la linea se si sovrappongono
+    const placed = [];
+    let labelSvg = '';
+    labels.forEach(lb => {
+      const w = lb.text.length * 6.4 + 14, h = 18;
+      const hit = (cy, other) => Math.abs(lb.cx - other.cx) < (w + other.w) / 2 + 2 && Math.abs(cy - other.cy) < h + 2;
+      let cy = lb.cy;
+      const tries = [0, 22, -22, 44, -44, 66, -66];
+      for (let i = 0; i < tries.length; i++) {
+        const c = lb.cy + tries[i];
+        const inside = lb.ymax - lb.ymin < 0 || (c >= lb.ymin && c <= lb.ymax);
+        if (inside && !placed.some(o => hit(c, o))) { cy = c; break; }
+      }
+      placed.push({ cx: lb.cx, cy: cy, w: w });
+      grow(lb.cx - w / 2, cy - h / 2, lb.cx + w / 2, cy + h / 2);
+      labelSvg += '<rect x="' + (lb.cx - w / 2) + '" y="' + (cy - h / 2) + '" width="' + w + '" height="' + h + '" rx="4" fill="#fff" stroke="#2458a6" stroke-width="0.8" opacity="0.95"/>';
+      labelSvg += '<text x="' + lb.cx + '" y="' + (cy + 4) + '" font-size="11" font-weight="600" text-anchor="middle" fill="#2458a6">' + esc(lb.text) + '</text>';
+    });
+
+    return {
+      inner: body + lines + labelSvg,
+      bounds: { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+    };
+  }
+
+  // ============================================================
+  //  STATO E INTERFACCIA
+  // ============================================================
+  const $ = id => document.getElementById(id);
+  const canvas = $('canvas'), stage = $('stage'), sqlBox = $('sql'), msgBox = $('messages');
+  let current = null;                        // { sql, diagram, tables }
+  let viewMode = 'diagram';
+
+  function showMessages(list, isError) {
+    if (!list.length) { msgBox.hidden = true; return; }
+    msgBox.className = isError ? 'error' : '';
+    msgBox.innerHTML = '<div class="head"><span>' + (isError ? 'Errore' : 'Avvisi (' + list.length + ')') +
+      '</span><button type="button" id="msgClose">Nascondi</button></div><ul>' +
+      list.map(m => '<li>' + esc(m) + '</li>').join('') + '</ul>';
+    msgBox.hidden = false;
+    $('msgClose').addEventListener('click', () => { msgBox.hidden = true; });
+  }
+
+  function setView(mode) {
+    viewMode = mode;
+    $('tabDiagram').classList.toggle('active', mode === 'diagram');
+    $('tabSql').classList.toggle('active', mode === 'sql');
+    canvas.style.display = mode === 'diagram' ? 'block' : 'none';
+    sqlBox.hidden = mode !== 'sql' || !current;
+    $('zoomGroup').style.display = mode === 'diagram' ? 'inline-flex' : 'none';
+    if (mode === 'diagram') applyView();
+  }
+
+  function loadData(data) {
+    if (!data || !Array.isArray(data.entities)) {
+      throw new Error('formato non valido: manca l\u2019elenco "entities" (è un file salvato dall\u2019editor ER?).');
+    }
+    if (!data.entities.length) throw new Error('il diagramma non contiene nessuna entità.');
+    const r = translate(data);
+    const sql = genSql(r.tables, m => { if (r.warnings.indexOf(m) === -1) r.warnings.push(m); });
+    const diagram = buildDiagram(r.tables);
+    current = { sql: sql, diagram: diagram, tables: r.tables };
+    canvas.innerHTML = '<g>' + diagram.inner + '</g>';
+    sqlBox.textContent = sql;
+    $('placeholder').style.display = 'none';
+    ['btnSvg', 'btnPng', 'btnSqlFile', 'btnCopy'].forEach(id => { $(id).disabled = false; });
+    showMessages(r.warnings, false);
+    setView(viewMode);
+    fitView();
+  }
+
+  function handleFile(file) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        loadData(JSON.parse(reader.result));
+      } catch (err) {
+        showMessages(['Non riesco a leggere il file: ' + err.message], true);
+      }
+    };
+    reader.onerror = () => showMessages(['Impossibile leggere il file selezionato.'], true);
+    reader.readAsText(file);
+  }
+
+  $('btnOpen').addEventListener('click', () => $('fileInput').click());
+  $('fileInput').addEventListener('change', e => {
+    const f = e.target.files[0];
+    e.target.value = '';
+    if (f) handleFile(f);
+  });
+  ['dragenter', 'dragover'].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); stage.classList.add('drop'); }));
+  ['dragleave', 'drop'].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); stage.classList.remove('drop'); }));
+  document.addEventListener('drop', e => {
+    const f = e.dataTransfer && e.dataTransfer.files[0];
+    if (f) handleFile(f);
+  });
+  $('tabDiagram').addEventListener('click', () => setView('diagram'));
+  $('tabSql').addEventListener('click', () => setView('sql'));
+
+  // ============================================================
+  //  ZOOM E SPOSTAMENTO
+  // ============================================================
+  const ZOOM_MIN = 0.05, ZOOM_MAX = 4;
+  const view = { x: 0, y: 0, k: 1 };         // x, y = angolo in alto a sinistra; k = ingrandimento
+  let pan = null;
+
+  function applyView() {
+    const r = canvas.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    const w = r.width / view.k, h = r.height / view.k;
+    canvas.setAttribute('viewBox', view.x + ' ' + view.y + ' ' + w + ' ' + h);
+    $('btnZoomReset').textContent = Math.round(view.k * 100) + '%';
+  }
+
+  function zoomAt(k, cx, cy) {                // (cx, cy) = punto che resta fermo, in pixel
+    k = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, k));
+    const mx = view.x + cx / view.k, my = view.y + cy / view.k;
+    view.k = k;
+    view.x = mx - cx / k;
+    view.y = my - cy / k;
+    applyView();
+  }
+
+  function zoomCenter(k) {
+    const r = canvas.getBoundingClientRect();
+    zoomAt(k, r.width / 2, r.height / 2);
+  }
+
+  // mostra tutto il diagramma, al massimo al 100%
+  function fitView() {
+    if (!current) return;
+    const b = current.diagram.bounds, r = canvas.getBoundingClientRect(), pad = 30;
+    if (!r.width || !r.height) return;
+    view.k = Math.min(1, Math.max(ZOOM_MIN, Math.min(r.width / (b.w + 2 * pad), r.height / (b.h + 2 * pad))));
+    view.x = b.x + b.w / 2 - r.width / (2 * view.k);
+    view.y = b.y + b.h / 2 - r.height / (2 * view.k);
+    applyView();
+  }
+
+  canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    const r = canvas.getBoundingClientRect();
+    let dx = e.deltaX, dy = e.deltaY;
+    if (e.deltaMode === 1) { dx *= 33; dy *= 33; }
+    if (e.ctrlKey || e.metaKey) {
+      zoomAt(view.k * Math.exp(-dy * 0.002), e.clientX - r.left, e.clientY - r.top);
+    } else {
+      if (e.shiftKey && !dx) { dx = dy; dy = 0; }
+      view.x += dx / view.k;
+      view.y += dy / view.k;
+      applyView();
+    }
+  }, { passive: false });
+
+  canvas.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    pan = { sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y };
+    canvas.classList.add('panning');
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', e => {
+    if (!pan) return;
+    view.x = pan.vx - (e.clientX - pan.sx) / view.k;
+    view.y = pan.vy - (e.clientY - pan.sy) / view.k;
+    applyView();
+  });
+  document.addEventListener('mouseup', () => { pan = null; canvas.classList.remove('panning'); });
+
+  $('btnZoomIn').addEventListener('click', () => zoomCenter(view.k * 1.25));
+  $('btnZoomOut').addEventListener('click', () => zoomCenter(view.k / 1.25));
+  $('btnZoomReset').addEventListener('click', () => zoomCenter(1));
+  $('btnFit').addEventListener('click', fitView);
+  new ResizeObserver(applyView).observe(stage);
+
+  // ============================================================
+  //  ESPORTAZIONE E COPIA
+  // ============================================================
+  function download(name, blob) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  // SVG autonomo: il riquadro (viewBox) parte da ciò che è davvero disegnato, più un margine
+  function exportSvgText(withBackground) {
+    const b = current.diagram.bounds, pad = 30;
+    const x0 = Math.floor(b.x - pad), y0 = Math.floor(b.y - pad);
+    const w = Math.ceil(b.x + b.w + pad) - x0, h = Math.ceil(b.y + b.h + pad) - y0;
+    return '<?xml version="1.0" encoding="UTF-8"?>\n' +
+      '<svg xmlns="http://www.w3.org/2000/svg" width="' + w + '" height="' + h + '" viewBox="' + x0 + ' ' + y0 + ' ' + w + ' ' + h +
+      '" font-family="\'Segoe UI\', Helvetica, Arial, sans-serif">\n' +
+      (withBackground ? '<rect x="' + x0 + '" y="' + y0 + '" width="' + w + '" height="' + h + '" fill="#fff"/>\n' : '') +
+      current.diagram.inner + '\n</svg>\n';
+  }
+
+  $('btnSvg').addEventListener('click', () => {
+    if (!current) return;
+    download('modello_logico_relazionale.svg', new Blob([exportSvgText(true)], { type: 'image/svg+xml;charset=utf-8' }));
+  });
+
+  $('btnPng').addEventListener('click', () => {
+    if (!current) return;
+    const text = exportSvgText(true);
+    const m = text.match(/width="(\d+)" height="(\d+)"/);
+    const W = +m[1], H = +m[2];
+    const scale = Math.min(2, Math.max(0.25, Math.sqrt(16000000 / (W * H))));   // i browser limitano la superficie del canvas
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = Math.round(W * scale);
+      c.height = Math.round(H * scale);
+      const ctx = c.getContext('2d');
+      ctx.scale(scale, scale);
+      ctx.drawImage(img, 0, 0, W, H);
+      c.toBlob(b => download('modello_logico_relazionale.png', b), 'image/png');
+    };
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(text);
+  });
+
+  $('btnSqlFile').addEventListener('click', () => {
+    if (current) download('schema.sql', new Blob([current.sql], { type: 'text/plain;charset=utf-8' }));
+  });
+
+  $('btnCopy').addEventListener('click', () => {
+    if (!current) return;
+    const btn = $('btnCopy'), old = btn.textContent;
+    const done = ok => {
+      btn.textContent = ok ? 'Copiato' : 'Copia non riuscita';
+      setTimeout(() => { btn.textContent = old; }, 1800);
+    };
+    const fallback = () => {
+      const ta = document.createElement('textarea');
+      ta.value = current.sql;
+      document.body.appendChild(ta);
+      ta.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch (err) { ok = false; }
+      document.body.removeChild(ta);
+      done(ok);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(current.sql).then(() => done(true), fallback);
+    } else {
+      fallback();
+    }
+  });
+
+  setView('diagram');
+  window.__ml = { translate: translate, guessType: guessType, words: words };   // per le prove
+})();
+</script>
+</body>
+</html>
