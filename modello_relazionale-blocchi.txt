@@ -1,0 +1,278 @@
+VERSIONE F (da E) - modello relazionale testuale e linee che non attraversano le schede
+Blocchi da applicare a modello_logico_E.html, nell'ordine. Dove non è indicato 'SOSTITUISCI', si aggiunge soltanto.
+
+======================================================================
+1. Schede (HTML)
+======================================================================
+DOVE: nella barra, SOSTITUISCI il gruppo '<span class="seg"> ... </span>' con
+
+  <span class="seg">
+    <button id="tabDiagram" type="button" class="active">Diagramma</button>
+    <button id="tabModel" type="button">Modello relazionale</button>
+    <button id="tabSql" type="button">SQL</button>
+  </span>
+
+======================================================================
+2. Pulsante Copia modello (HTML)
+======================================================================
+DOVE: subito dopo il pulsante 'btnCopy'
+
+  <button id="btnCopyModel" type="button" disabled style="display:none">Copia modello</button>
+
+======================================================================
+3. Vista modello (HTML)
+======================================================================
+DOVE: nella tela, subito PRIMA di '<pre id="sql" hidden></pre>'
+
+  <div id="model" hidden>
+    <p id="modelLegend">Chiave primaria: <u>sottolineata</u>. Chiave esterna: <i>corsivo</i>.</p>
+    <div id="modelBody"></div>
+  </div>
+
+======================================================================
+4. Stili (CSS)
+======================================================================
+DOVE: subito prima del commento '/* barra di stato: altezza fissa, una sola riga */'
+
+  /* modello relazionale in forma testuale */
+  #model {
+    position: absolute; top: 0; right: 0; bottom: 0; left: 0; overflow: auto;
+    padding: 24px 32px; background: #fff; font: 19px/1.9 Georgia, 'Times New Roman', serif;
+  }
+  #modelLegend { margin: 0 0 22px; font: 13px/1.4 'Segoe UI', Helvetica, Arial, sans-serif; color: #5b626a; }
+  #model p.rel { margin: 0 0 8px; }
+  #model p.refhead { margin: 26px 0 8px; font: 600 13px/1.4 'Segoe UI', Helvetica, Arial, sans-serif; color: #5b626a; }
+  #model p.ref { margin: 0 0 4px; font-size: 16px; color: #3b4350; }
+  #model u { text-decoration: underline; text-underline-offset: 4px; text-decoration-thickness: 1.5px; }
+
+======================================================================
+5. Percorso delle linee
+======================================================================
+DOVE: in buildDiagram, SOSTITUISCI tutto da 'const straight = edges.filter(e => !e.self);' fino a PRIMA del commento '// FK verso la stessa tabella ...' con
+
+    const straight = edges.filter(e => !e.self);
+    const step = cardW + gap;
+    natOrder.forEach((t, i) => { coords.get(t).col = i; });
+
+    // le corsie sono gli spazi tra le colonne: la corsia g sta a sinistra della colonna g (0 = margine sinistro)
+    const gapRange = g => { const a = g === 0 ? sideMargin - gap : sideMargin + (g - 1) * step + cardW; return [a, a + gap]; };
+
+    straight.forEach(e => {
+      if (e.src.col !== undefined) {                    // tabella nativa che punta a un'altra nativa
+        const sc = e.src.col, dc = e.dst.col;
+        e.gapD = sc > dc ? dc + 1 : dc;                 // corsia della destinazione rivolta verso la sorgente
+        if (Math.abs(sc - dc) > 1) {                    // colonne non adiacenti: si passa sopra le schede
+          e.corridor = true;
+          e.gapS = sc > dc ? sc : sc + 1;               // corsia della sorgente rivolta verso la destinazione
+        }
+      } else {                                          // tabella ponte: corsia dal lato rivolto verso di lei
+        const right = e.dst.col + 1, left = e.dst.col;  // (o dall'altro se è coperta dal ponte stesso)
+        const covered = g => { const r = gapRange(g), m = (r[0] + r[1]) / 2; return m > e.src.x - 4 && m < e.src.x + e.src.w + 4; };
+        let g = e.src.x > e.dst.x ? right : left;
+        if (covered(g)) g = g === right ? left : right;
+        e.gapD = g;
+      }
+    });
+
+    // ogni linea ha la sua x nella corsia, anche se la corsia è condivisa
+    const lanes = new Map();
+    const inLane = (g, it) => { if (!lanes.has(g)) lanes.set(g, []); lanes.get(g).push(it); };
+    straight.forEach(e => {
+      inLane(e.gapD, { e: e, key: 'laneX' });
+      if (e.corridor) inLane(e.gapS, { e: e, key: 'laneSX' });
+    });
+    lanes.forEach((grp, g) => {
+      const r = gapRange(g), spacing = (r[1] - r[0] - 16) / grp.length;
+      grp.forEach((it, i) => { it.e[it.key] = r[0] + 8 + spacing * (i + 0.5); });
+    });
+    let corr = 0;
+    straight.forEach(e => { if (e.corridor) e.corrY = topY - 20 - 14 * corr++; });   // corridoi sopra le schede
+
+    let lines = '';
+    const labels = [];
+    const arrow = (tipX, y, dir) => {
+      const base = tipX - dir * 8;
+      grow(Math.min(tipX, base), y - 4, Math.max(tipX, base), y + 4);
+      return '<polygon points="' + tipX + ',' + y + ' ' + base + ',' + (y - 4) + ' ' + base + ',' + (y + 4) + '" fill="#2458a6"/>';
+    };
+    const pathSvg = pts => {
+      pts.forEach(p => grow(p[0], p[1], p[0], p[1]));
+      return '<path d="M ' + pts.map(p => p[0] + ' ' + p[1]).join(' L ') + '" fill="none" stroke="#2458a6" stroke-width="1.8" stroke-linejoin="round"/>';
+    };
+
+    straight.forEach(e => {
+      const enterX = e.laneX < e.dst.x + e.dst.w / 2 ? e.dst.x : e.dst.x + e.dst.w;
+      let pts;
+      if (e.corridor) {
+        const exitX = e.laneSX < e.src.x + e.src.w / 2 ? e.src.x : e.src.x + e.src.w;
+        pts = [[exitX, e.srcY], [e.laneSX, e.srcY], [e.laneSX, e.corrY], [e.laneX, e.corrY], [e.laneX, e.dstY], [enterX, e.dstY]];
+        labels.push({ cx: (e.laneSX + e.laneX) / 2, cy: e.corrY, text: e.label, axis: 'h',
+                      min: Math.min(e.laneSX, e.laneX), max: Math.max(e.laneSX, e.laneX) });
+      } else {
+        const exitX = e.laneX < e.src.x + e.src.w / 2 ? e.src.x : e.src.x + e.src.w;
+        pts = [[exitX, e.srcY], [e.laneX, e.srcY], [e.laneX, e.dstY], [enterX, e.dstY]];
+        labels.push({ cx: e.laneX, cy: (e.srcY + e.dstY) / 2, text: e.label, axis: 'v',
+                      min: Math.min(e.srcY, e.dstY) + 10, max: Math.max(e.srcY, e.dstY) - 10 });
+      }
+      lines += pathSvg(pts);
+      lines += arrow(enterX > e.laneX ? enterX - 1 : enterX + 1, e.dstY, enterX > e.laneX ? 1 : -1);
+    });
+
+======================================================================
+6. Etichette degli anelli
+======================================================================
+DOVE: nel ciclo degli anelli, SOSTITUISCI la riga 'labels.push({ cx: lx, ... ymin ... ymax ... });' con
+
+      labels.push({ cx: lx, text: e.label, cy: (e.srcY + e.dstY) / 2, axis: 'v', min: Math.min(e.srcY, e.dstY) + 10, max: Math.max(e.srcY, e.dstY) - 10 });
+
+======================================================================
+7. Posizione delle etichette
+======================================================================
+DOVE: SOSTITUISCI tutto da '// etichette sulle corsie: ...' fino a PRIMA di 'return { inner: body + lines + labelSvg, ...' con
+
+    // etichette: sfondo bianco, spostate lungo la linea (in verticale o in orizzontale) se si sovrappongono
+    const placed = [];
+    let labelSvg = '';
+    labels.forEach(lb => {
+      const w = lb.text.length * 6.4 + 14, h = 18;
+      const vertical = lb.axis !== 'h';
+      const hit = (x, y, o) => Math.abs(x - o.cx) < (w + o.w) / 2 + 2 && Math.abs(y - o.cy) < h + 2;
+      const shifts = vertical ? [0, 22, -22, 44, -44, 66, -66] : [0, w + 10, -(w + 10), 2 * (w + 10), -2 * (w + 10)];
+      const lo = vertical ? lb.min : lb.min + w / 2, hi = vertical ? lb.max : lb.max - w / 2;
+      let cx = lb.cx, cy = lb.cy;
+      for (let i = 0; i < shifts.length; i++) {
+        const nx = vertical ? lb.cx : lb.cx + shifts[i], ny = vertical ? lb.cy + shifts[i] : lb.cy;
+        const v = vertical ? ny : nx;
+        if ((hi < lo || (v >= lo && v <= hi)) && !placed.some(o => hit(nx, ny, o))) { cx = nx; cy = ny; break; }
+      }
+      placed.push({ cx: cx, cy: cy, w: w });
+      grow(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2);
+      labelSvg += '<rect x="' + (cx - w / 2) + '" y="' + (cy - h / 2) + '" width="' + w + '" height="' + h + '" rx="4" fill="#fff" stroke="#2458a6" stroke-width="0.8" opacity="0.95"/>';
+      labelSvg += '<text x="' + cx + '" y="' + (cy + 4) + '" font-size="11" font-weight="600" text-anchor="middle" fill="#2458a6">' + esc(lb.text) + '</text>';
+    });
+
+======================================================================
+8. Funzione relationalHtml
+======================================================================
+DOVE: come nuova sezione, subito prima della sezione 'STATO E INTERFACCIA'
+
+  // ============================================================
+  //  MODELLO RELAZIONALE (forma testuale)
+  // ============================================================
+  // NOME (chiave primaria sottolineata, chiave esterna in corsivo, altri campi): senza tipi.
+  // Si usano i tag <u> e <i> perché sopravvivono al copia e incolla in Word o LibreOffice.
+  function relationalHtml(tables) {
+    const col = c => {
+      const n = esc(c.name);
+      if (c.pk && c.fk) return '<u><i>' + n + '</i></u>';
+      if (c.pk) return '<u>' + n + '</u>';
+      if (c.fk) return '<i>' + n + '</i>';
+      return n;
+    };
+    let html = '';
+    tables.forEach(t => {
+      html += '<p class="rel"><b>' + esc(t.name.toUpperCase()) + '</b> (' + orderedCols(t).map(col).join(', ') + ')</p>';
+    });
+    const refs = [];
+    const list = a => a.length > 1 ? '(' + a.join(', ') + ')' : a[0];
+    tables.forEach(t => t.fks.forEach(f => {
+      refs.push('<p class="ref">' + esc(t.name.toUpperCase()) + '.' + esc(list(f.cols)) + ' &rarr; ' +
+                esc(f.ref.name.toUpperCase()) + '.' + esc(list(f.refCols)) + '</p>');
+    }));
+    if (refs.length) html += '<p class="refhead">Vincoli di integrit\u00e0 referenziale</p>' + refs.join('');
+    return html;
+  }
+
+======================================================================
+9. Variabili
+======================================================================
+DOVE: SOSTITUISCI la riga 'const canvas = ..., stage = ..., sqlBox = ..., msgBox = ...;' con
+
+const canvas = $('canvas'), stage = $('stage'), sqlBox = $('sql'), modelBox = $('model'), msgBox = $('messages');
+
+======================================================================
+10. setView
+======================================================================
+DOVE: SOSTITUISCI l'intera funzione setView con
+
+  function setView(mode) {
+    viewMode = mode;
+    $('tabDiagram').classList.toggle('active', mode === 'diagram');
+    $('tabModel').classList.toggle('active', mode === 'model');
+    $('tabSql').classList.toggle('active', mode === 'sql');
+    canvas.style.display = mode === 'diagram' ? 'block' : 'none';
+    modelBox.hidden = mode !== 'model' || !current;
+    sqlBox.hidden = mode !== 'sql' || !current;
+    $('zoomGroup').style.display = mode === 'diagram' ? 'inline-flex' : 'none';
+    $('btnCopy').style.display = mode === 'model' ? 'none' : '';
+    $('btnCopyModel').style.display = mode === 'model' ? '' : 'none';
+    if (mode === 'diagram') applyView();
+  }
+
+======================================================================
+11. loadData
+======================================================================
+DOVE: in loadData, SOSTITUISCI la riga 'sqlBox.textContent = sql;' con
+
+    sqlBox.textContent = sql;
+    $('modelBody').innerHTML = relationalHtml(r.tables);
+
+======================================================================
+12. loadData (pulsanti)
+======================================================================
+DOVE: in loadData, SOSTITUISCI la riga con 'forEach(id => { $(id).disabled = false; })' con
+
+    ['btnSvg', 'btnPng', 'btnSqlFile', 'btnCopy', 'btnCopyModel'].forEach(id => { $(id).disabled = false; });
+
+======================================================================
+13. Scheda Modello
+======================================================================
+DOVE: subito prima del gestore di 'tabSql'
+
+  $('tabModel').addEventListener('click', () => setView('model'));
+
+======================================================================
+14. Copia
+======================================================================
+DOVE: SOSTITUISCI l'intero gestore di '$('btnCopy')...' con queste due funzioni e i due gestori
+
+  // messaggio breve sul pulsante dopo la copia
+  function flash(btn, ok) {
+    const old = btn.textContent;
+    btn.textContent = ok ? 'Copiato' : 'Copia non riuscita';
+    setTimeout(() => { btn.textContent = old; }, 1800);
+  }
+
+  $('btnCopy').addEventListener('click', () => {
+    if (!current) return;
+    const btn = $('btnCopy');
+    const fallback = () => {
+      const ta = document.createElement('textarea');
+      ta.value = current.sql;
+      document.body.appendChild(ta);
+      ta.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch (err) { ok = false; }
+      document.body.removeChild(ta);
+      flash(btn, ok);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(current.sql).then(() => flash(btn, true), fallback);
+    } else {
+      fallback();
+    }
+  });
+
+  // copia il modello con la formattazione (sottolineato e corsivo), pronto da incollare in un documento
+  $('btnCopyModel').addEventListener('click', () => {
+    if (!current) return;
+    const sel = window.getSelection(), range = document.createRange();
+    range.selectNodeContents($('modelBody'));
+    sel.removeAllRanges();
+    sel.addRange(range);
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (err) { ok = false; }
+    sel.removeAllRanges();
+    flash($('btnCopyModel'), ok);
+  });
+
