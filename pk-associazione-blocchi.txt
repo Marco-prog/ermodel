@@ -1,0 +1,123 @@
+VERSIONE G (da F) - chiave primaria propria delle associazioni, con la casella per le FK
+Blocchi da applicare a modello_logico_F.html, nell'ordine. Dove non è indicato 'SOSTITUISCI', si aggiunge soltanto.
+
+======================================================================
+1. Casella (HTML)
+======================================================================
+DOVE: nella barra, subito dopo il pulsante 'btnCopyModel'
+
+  <label id="optKey" title="Per le associazioni con una chiave primaria propria: la chiave comprende anche le FK (id, FK1, FK2)"><input type="checkbox" id="chkFkKey"> Includi le FK nella PK</label>
+
+======================================================================
+2. Stile (CSS)
+======================================================================
+DOVE: subito dopo la regola '#toolbar .sep { ... }'
+
+  #toolbar label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+
+======================================================================
+3. translate
+======================================================================
+DOVE: SOSTITUISCI la riga 'function translate(data) {' con
+
+  function translate(data, opts) {
+    const fkInKey = !!(opts && opts.fkInKey);     // true: la chiave propria dell'associazione si somma alle FK
+
+======================================================================
+4. Attributi dell'associazione
+======================================================================
+DOVE: nella raccolta degli attributi, SOSTITUISCI 'assocs[at.owner].attrs.push(at.name);' con
+
+        assocs[at.owner].attrs.push({ name: at.name, pk: !!at.pk });
+
+======================================================================
+5. addAssocAttrs
+======================================================================
+DOVE: SOSTITUISCI l'intera funzione addAssocAttrs con
+
+    // Attributi dell'associazione. In una tabella di associazione (ownTable) quelli che sono identificatori formano
+    // la chiave primaria propria (id diventa id_<associazione>). Se l'associazione non genera una tabella (1:N, 1:1)
+    // i suoi attributi finiscono in quella di un'entità, che ha già la sua chiave: sono colonne normali.
+    function addAssocAttrs(t, a, ownTable) {
+      a.attrs.forEach(at => {
+        if (at.pk && ownTable) {
+          const pure = words(at.name).join('') === 'id';
+          addCol(t, pure ? 'id_' + t.name : at.name, { assoc: true, pk: true, type: isIdName(at.name) ? 'INT' : guessType(at.name) });
+        } else {
+          if (at.pk) warn('L\u2019identificatore «' + at.name + '» dell\u2019associazione «' + a.name + '» è una colonna normale: l\u2019associazione non genera una tabella propria.');
+          addCol(t, at.name, { assoc: true, type: guessType(at.name) });
+        }
+      });
+    }
+
+======================================================================
+6. bridge
+======================================================================
+DOVE: in bridge, SOSTITUISCI le righe da 'let key = parts.filter(p => p.many);' fino a 'addAssocAttrs(bt, a);' con
+
+      const ownKey = a.attrs.some(x => x.pk);                                // l'associazione ha un identificatore proprio
+      let key = parts.filter(p => p.many);
+      if (a.links.length === 2 || !key.length) key = parts;                  // N:M: tutte le FK; altrimenti quelle dei lati N
+      if (ownKey && !fkInKey) key = [];                                      // chiave propria: le FK restano FK normali
+      key.forEach(p => p.fk.cols.forEach(cn => { bt.cols.find(c => c.name === cn).pk = true; }));
+      addAssocAttrs(bt, a, true);
+      if (ownKey) {
+        const own = bt.cols.filter(c => c.assoc && c.pk);
+        if (own.length === 1 && !fkInKey && own[0].type === 'INT' && isIdName(own[0].name)) own[0].auto = true;
+        warn(fkInKey
+          ? 'Associazione «' + a.name + '»: la chiave primaria comprende la chiave propria e le FK (casella «Includi le FK nella PK» attiva).'
+          : 'Associazione «' + a.name + '»: ha una chiave primaria propria, che è l\u2019unica; le FK restano chiavi esterne normali.');
+      }
+
+======================================================================
+7. orderedCols
+======================================================================
+DOVE: in orderedCols, SOSTITUISCI le prime righe (da 'function orderedCols(t) {' a 't.cols.filter(c => c.pk),') con
+
+  function orderedCols(t) {
+    const pk = t.cols.filter(c => c.pk);
+    return [].concat(
+      pk.filter(c => !c.fk), pk.filter(c => c.fk),          // la chiave propria prima delle FK che fanno parte della chiave
+
+======================================================================
+8. Variabili
+======================================================================
+DOVE: subito dopo 'let current = null; ...'
+
+  let lastData = null;                       // ultimo JSON letto, per rifare la traduzione quando cambia la casella
+
+======================================================================
+9. loadData
+======================================================================
+DOVE: SOSTITUISCI 'function loadData(data) {' con
+
+  function loadData(data, keepView) {
+
+======================================================================
+10. loadData: traduzione
+======================================================================
+DOVE: SOSTITUISCI 'const r = translate(data);' con
+
+    const r = translate(data, { fkInKey: $('chkFkKey').checked });
+
+======================================================================
+11. loadData: ultimo JSON
+======================================================================
+DOVE: subito dopo la riga 'current = { sql: sql, ... };' aggiungi
+
+    lastData = data;
+
+======================================================================
+12. loadData: vista
+======================================================================
+DOVE: in fondo a loadData, SOSTITUISCI 'fitView();' con
+
+    if (keepView) applyView(); else fitView();               // cambiando la casella la vista resta dov'è
+
+======================================================================
+13. Gestore della casella
+======================================================================
+DOVE: subito prima del gestore di 'btnOpen'
+
+  $('chkFkKey').addEventListener('change', () => { if (lastData) loadData(lastData, true); });
+

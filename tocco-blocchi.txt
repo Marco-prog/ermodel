@@ -1,0 +1,188 @@
+TOCCO (tablet) - Pointer Events al posto degli eventi del mouse, pizzico, doppio tocco
+Blocchi da applicare a er-editor.html (versione con 'Ribalta attributi'), nell'ordine. Il mouse continua a funzionare come prima.
+
+======================================================================
+1. Stili (CSS)
+======================================================================
+DOVE: subito prima di '</style>'
+
+
+  /* tocco (tablet): la tela gestisce i gesti da sola, niente scorrimento né selezione del testo */
+  #canvas {
+    touch-action: none; -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
+  }
+  #toolbar, #stage, #statusbar { -webkit-user-select: none; user-select: none; }
+  #rename { -webkit-user-select: text; user-select: text; }
+  #toolbar button, #toolbar select, #toolbar label { touch-action: manipulation; }
+  @media (pointer: coarse) {                 /* schermi tattili: bersagli più grandi */
+    #toolbar button, #toolbar select { min-height: 42px; padding-left: 14px; padding-right: 14px; }
+    #toolbar label { min-height: 42px; }
+    #toolbar input[type="checkbox"] { width: 22px; height: 22px; }
+    .link .hit { stroke-width: 30; }
+    .attr .ahit { stroke: transparent; stroke-width: 6px; pointer-events: all; }   /* poco: le righe distano 20px, un'area più larga coprirebbe il pallino accanto */
+    #rename { font-size: 16px; height: 34px; }
+  }
+
+======================================================================
+2. Gestori che cambiano solo nome
+======================================================================
+DOVE: SOSTITUISCI il nome dell'evento in questi quattro punti (il resto del gestore resta uguale):
+  - $svg.on('mousedown', function (e) {   (gestore dello sfondo)   ->  'pointerdown'
+  - $svg.on('mousedown', '.item', ...      ->  'pointerdown'
+  - $svg.on('mousedown', '.attr', ...      ->  'pointerdown'
+  - $(document).on('mouseup', function () { // clic sul pallino ...   ->  'pointerup'
+
+(nessun codice da aggiungere)
+
+======================================================================
+3. Collegamenti
+======================================================================
+DOVE: SOSTITUISCI l'intero gestore '$('#links').on('mousedown', '.link', ...)' con
+
+  // clic o tocco su un collegamento: lo seleziona e, al rilascio senza movimento, alterna lato 1 / lato molti.
+  // Se invece si trascina, si sposta la vista e il collegamento non cambia.
+  $('#links').on('pointerdown', '.link', function (e) {
+    if (e.button !== 0) return;
+    endRename(true);
+    const id = $(this).attr('data-id');
+    linkTap = { id: id, sx: e.clientX, sy: e.clientY };
+    selected = { kind: 'link', id: id };
+    markSelected();
+    startPan(e);
+    e.stopPropagation();
+  });
+
+======================================================================
+4. Trascinamento con soglia
+======================================================================
+DOVE: SOSTITUISCI l'inizio del gestore '$(document).on('mousemove', ...)' del trascinamento (le prime righe, fino a 'const p = pointer(e);') con
+
+  $(document).on('pointermove', function (e) {
+    if (!drag) return;
+    if (!drag.moved && drag.thr && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < drag.thr) return;   // il dito trema: soglia prima di trascinare
+    const p = pointer(e);
+
+======================================================================
+5. Soglia nei due 'drag'
+======================================================================
+DOVE: nei due punti dove si crea 'drag = {...}', SOSTITUISCI la riga 'moved: false' preceduta da 'dy: p.y - o.y,' (elementi) e da 'dy: p.y - a.y,' (attributi) aggiungendo prima di 'moved' la riga
+
+      sx: e.clientX, sy: e.clientY, thr: touchThr(e),
+
+======================================================================
+6. Spostamento della vista
+======================================================================
+DOVE: nella sezione ZOOM, '$(document).on('mousemove', ...)' diventa 'pointermove' e '$(document).on('mouseup', ...)' diventa 'pointerup'
+
+(nessun codice da aggiungere)
+
+======================================================================
+7. startRename
+======================================================================
+DOVE: come seconda riga di startRename (subito dopo 'function startRename(kind, id) {') aggiungi
+
+    if (downCount > 0) { pendingRename = { kind: kind, id: id }; return; }   // si apre al rilascio del dito o del mouse
+
+======================================================================
+8. Testi per lo schermo tattile
+======================================================================
+DOVE: subito dopo la chiusura '};' di HINTS e prima di 'function setAddMode', aggiungi
+
+  // schermo tattile: testi senza mouse né tastiera
+  if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) {
+    Object.keys(HINTS).forEach(k => {
+      HINTS[k] = HINTS[k].replace('Doppio clic', 'Doppio tocco').replace('Clic su', 'Tocco su').replace('Clic sul', 'Tocco sul')
+        .replace('Clicca', 'Tocca').replace('Canc per eliminare', 'pulsante Elimina per eliminare')
+        .replace('Esc per annullare', 'ripremi il pulsante per annullare').replace('Esc per uscire', 'ripremi il pulsante per uscire');
+    });
+  }
+
+======================================================================
+9. Sezione tocco
+======================================================================
+DOVE: come nuova sezione, subito prima della sezione AVVIO
+
+  // ============================================================
+  //  TOCCO (tablet): pizzico a due dita, doppio tocco, rinomina al rilascio
+  // ============================================================
+  // I gestori di tela, elementi e attributi usano i Pointer Events: lo stesso codice vale per mouse, dito e penna.
+  // Qui c'è ciò che serve solo al tocco.
+  const touches = new Map();                 // dita appoggiate: pointerId -> { x, y }
+  let pinch = null;                          // gesto a due dita in corso
+  let downCount = 0;                         // puntatori attualmente premuti
+  let pendingRename = null;                  // rinomina da aprire al rilascio (la tastiera si apre solo dopo un gesto concluso)
+  let tap = null, lastTap = null, linkTap = null;
+
+  function touchThr(e) { return (e.originalEvent || e).pointerType === 'mouse' ? 0 : 8; }   // soglia di movimento prima di trascinare
+
+  document.addEventListener('pointerdown', function (e) {
+    if (e.isPrimary) downCount = 0;          // un rilascio perso non deve bloccare il conteggio
+    downCount++;
+    if (e.pointerType !== 'touch') { tap = null; return; }
+    touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (touches.size === 2) {                // seconda dita: inizia il pizzico, il resto viene annullato
+      drag = null; pan = null; linkTap = null; pendingRename = null; tap = null; lastTap = null;
+      $svg.removeClass('panning');
+      const a = Array.from(touches.values()), r = svg.getBoundingClientRect();
+      const mx = (a[0].x + a[1].x) / 2 - r.left, my = (a[0].y + a[1].y) / 2 - r.top;
+      pinch = { d: Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y) || 1, k: view.k, px: view.x + mx / view.k, py: view.y + my / view.k };
+    }
+    if (touches.size >= 2) { e.stopPropagation(); return; }
+    const el = e.target.closest ? e.target.closest('.item, .attr') : null;      // per riconoscere il doppio tocco
+    tap = el ? { kind: el.classList.contains('attr') ? 'attribute' : el.getAttribute('data-kind'),
+                 id: el.getAttribute('data-id'), x: e.clientX, y: e.clientY } : null;
+  }, true);
+
+  document.addEventListener('pointermove', function (e) {
+    if (e.pointerType !== 'touch' || !touches.has(e.pointerId)) return;
+    touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (!pinch || touches.size !== 2) return;
+    const a = Array.from(touches.values()), r = svg.getBoundingClientRect();
+    const mx = (a[0].x + a[1].x) / 2 - r.left, my = (a[0].y + a[1].y) / 2 - r.top;
+    const k = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, pinch.k * Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y) / pinch.d));
+    view.k = k;                              // zoom e spostamento con le due dita, il punto di mezzo resta fermo
+    view.x = pinch.px - mx / k;
+    view.y = pinch.py - my / k;
+    applyView();
+  }, true);
+
+  function pointerEnd(e, cancelled) {
+    downCount = Math.max(0, downCount - 1);
+    if (e.pointerType === 'touch') {
+      touches.delete(e.pointerId);
+      if (touches.size < 2) pinch = null;
+    }
+    if (cancelled) {
+      drag = null; pan = null; linkTap = null; tap = null; pendingRename = null;
+      $svg.removeClass('panning');
+      return;
+    }
+    if (linkTap) {                           // collegamento: clic o tocco senza spostamento alterna 1 / molti
+      const t = linkTap;
+      linkTap = null;
+      if (Math.hypot(e.clientX - t.sx, e.clientY - t.sy) < 8) {
+        const l = model.links.find(x => x.id === t.id);
+        if (l) { l.many = !l.many; drawLinks(); pushHistory(); }
+      }
+    }
+    if (e.pointerType === 'touch' && tap && addMode === null && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) < 10) {
+      const now = Date.now();                // doppio tocco sullo stesso elemento: rinomina
+      if (lastTap && lastTap.id === tap.id && lastTap.kind === tap.kind && now - lastTap.t < 350) {
+        lastTap = null;
+        startRename(tap.kind, tap.id);
+      } else {
+        lastTap = { kind: tap.kind, id: tap.id, t: now };
+      }
+    }
+    tap = null;
+    if (downCount === 0 && pendingRename) {  // rinomina rimandata dal momento della pressione
+      const p = pendingRename;
+      pendingRename = null;
+      startRename(p.kind, p.id);
+    }
+  }
+  document.addEventListener('pointerup', e => pointerEnd(e, false));
+  document.addEventListener('pointercancel', e => pointerEnd(e, true));
+  svg.addEventListener('contextmenu', e => e.preventDefault());       // la pressione lunga non apre menu
+
