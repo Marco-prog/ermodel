@@ -335,7 +335,9 @@
           : 'Associazione «' + a.name + '»: ha una chiave primaria propria, che è l\u2019unica; le FK restano chiavi esterne normali.');
       }
       if (a.links.length > 2) {
-        warn('Associazione «' + a.name + '» tra ' + a.links.length + ' entità: tabella con una FK per entità, chiave primaria sulle FK dei lati N.');
+        warn(ownKey && !fkInKey
+          ? 'Associazione «' + a.name + '» tra ' + a.links.length + ' entità: tabella con una FK per entità.'
+          : 'Associazione «' + a.name + '» tra ' + a.links.length + ' entità: tabella con una FK per entità, chiave primaria sulle FK dei lati N.');
       }
     }
 

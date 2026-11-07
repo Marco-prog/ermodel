@@ -70,7 +70,16 @@ DOVE: in bridge, SOSTITUISCI le righe da 'let key = parts.filter(p => p.many);' 
       }
 
 ======================================================================
-7. orderedCols
+7. Messaggio per tre o più entità
+======================================================================
+DOVE: in bridge, SOSTITUISCI il warn('Associazione ... tra N entità: tabella con una FK per entità, chiave primaria sulle FK dei lati N.') con
+
+        warn(ownKey && !fkInKey
+          ? 'Associazione «' + a.name + '» tra ' + a.links.length + ' entità: tabella con una FK per entità.'
+          : 'Associazione «' + a.name + '» tra ' + a.links.length + ' entità: tabella con una FK per entità, chiave primaria sulle FK dei lati N.');
+
+======================================================================
+8. orderedCols
 ======================================================================
 DOVE: in orderedCols, SOSTITUISCI le prime righe (da 'function orderedCols(t) {' a 't.cols.filter(c => c.pk),') con
 
@@ -80,42 +89,42 @@ DOVE: in orderedCols, SOSTITUISCI le prime righe (da 'function orderedCols(t) {'
       pk.filter(c => !c.fk), pk.filter(c => c.fk),          // la chiave propria prima delle FK che fanno parte della chiave
 
 ======================================================================
-8. Variabili
+9. Variabili
 ======================================================================
 DOVE: subito dopo 'let current = null; ...'
 
   let lastData = null;                       // ultimo JSON letto, per rifare la traduzione quando cambia la casella
 
 ======================================================================
-9. loadData
+10. loadData
 ======================================================================
 DOVE: SOSTITUISCI 'function loadData(data) {' con
 
   function loadData(data, keepView) {
 
 ======================================================================
-10. loadData: traduzione
+11. loadData: traduzione
 ======================================================================
 DOVE: SOSTITUISCI 'const r = translate(data);' con
 
     const r = translate(data, { fkInKey: $('chkFkKey').checked });
 
 ======================================================================
-11. loadData: ultimo JSON
+12. loadData: ultimo JSON
 ======================================================================
 DOVE: subito dopo la riga 'current = { sql: sql, ... };' aggiungi
 
     lastData = data;
 
 ======================================================================
-12. loadData: vista
+13. loadData: vista
 ======================================================================
 DOVE: in fondo a loadData, SOSTITUISCI 'fitView();' con
 
     if (keepView) applyView(); else fitView();               // cambiando la casella la vista resta dov'è
 
 ======================================================================
-13. Gestore della casella
+14. Gestore della casella
 ======================================================================
 DOVE: subito prima del gestore di 'btnOpen'
 
