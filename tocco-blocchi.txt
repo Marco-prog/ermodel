@@ -118,6 +118,7 @@ DOVE: come nuova sezione, subito prima della sezione AVVIO
 
   document.addEventListener('pointerdown', function (e) {
     if (e.isPrimary) downCount = 0;          // un rilascio perso non deve bloccare il conteggio
+    if (e.isPrimary && e.pointerType === 'touch') { touches.clear(); pinch = null; }   // il primo dito azzera lo stato: una dita "rimasta" non deve far credere che ce ne siano due
     downCount++;
     if (e.pointerType !== 'touch') { tap = null; return; }
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
