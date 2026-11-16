@@ -85,6 +85,7 @@
   .attr { cursor: move; }
   .attr .ahit { fill: transparent; stroke: none; }
   .attr .dot { fill: #fff; stroke: var(--linea); stroke-width: 1.5; cursor: pointer; }
+  .attr text { cursor: pointer; }
   .attr.pk .dot { fill: var(--linea); }
   .attr text { font: 14px Helvetica, Arial, sans-serif; fill: var(--linea); pointer-events: none; user-select: none; }
   .attr .under { stroke: var(--linea); stroke-width: 1.2; display: none; pointer-events: none; }
@@ -103,9 +104,9 @@
   #rename { -webkit-user-select: text; user-select: text; }
   #toolbar button, #toolbar select, #toolbar label { touch-action: manipulation; }
   @media (pointer: coarse) {                 /* schermi tattili: bersagli più grandi */
-    #toolbar button, #toolbar select { min-height: 42px; padding-left: 14px; padding-right: 14px; }
-    #toolbar label { min-height: 42px; }
-    #toolbar input[type="checkbox"] { width: 22px; height: 22px; }
+    #toolbar button, #toolbar select { min-height: 34px; padding: 4px 9px; font-size: 14px; }
+    #toolbar label { min-height: 34px; font-size: 14px; }
+    #toolbar input[type="checkbox"] { width: 18px; height: 18px; }
     .link .hit { stroke-width: 30; }
     .attr .ahit { stroke: transparent; stroke-width: 6px; pointer-events: all; }   /* poco: le righe distano 20px, un'area più larga coprirebbe il pallino accanto */
     #rename { font-size: 16px; height: 34px; }
@@ -409,7 +410,7 @@ $(function () {
   //  MODALITÀ "AGGIUNGI" E BARRA DEGLI STRUMENTI
   // ============================================================
   const HINTS = {
-    none:        'Doppio clic per rinominare. Clic su un collegamento per alternare 1 e molti. Clic sul pallino di un attributo per alternare identificatore. Canc per eliminare.',
+    none:        'Doppio clic per rinominare. Clic su un collegamento per alternare 1 e molti. Pallino di un attributo: identificatore. Nome di un attributo: facoltativo. Canc per eliminare.',
     entity:      'Clicca sulla tela per posizionare l\u2019entità. Esc per annullare.',
     association: 'Clicca sulla tela per posizionare l\u2019associazione. Esc per annullare.',
     recursive:   'Clicca l\u2019entità su cui creare l\u2019associazione ricorsiva. Esc per annullare.',
@@ -555,6 +556,12 @@ $(function () {
         render();
       }
     }
+    if (drag && drag.kind === 'attribute' && drag.onName && !drag.moved) {       // un tocco sul nome alterna Facoltativo
+      drag.o.optional = !drag.o.optional;
+      if (!drag.o.optional) delete drag.o.optional;
+      render();
+      pushHistory();
+    }
     if (drag && drag.moved) pushHistory();
     drag = null;
   });
@@ -576,6 +583,7 @@ $(function () {
       o: t,
       $g: $('#attrs .attr[data-id="' + id + '"]'),
       onDot: $(e.target).is('circle'),       // clic sul pallino: se non ci si sposta, alterna identificatore
+      onName: !$(e.target).is('circle'),     // tutto ciò che non è il pallino (nome o area vicina): se non ci si sposta, alterna Facoltativo
       dx: p.x - a.x,
       dy: p.y - a.y,
       sx: e.clientX, sy: e.clientY, thr: touchThr(e),
@@ -748,7 +756,7 @@ $(function () {
       const $g     = svgEl('g', { 'class': 'attr' + (t.pk ? ' pk' : '') + (weakIds.has(t.owner) ? ' wk' : ''), 'data-id': t.id });
       const $hit   = svgEl('rect', { 'class': 'ahit', y: -11, height: 22 });
       const $dot   = svgEl('circle', { 'class': 'dot', r: 5 });
-      const $txt   = svgEl('text', { y: 0, 'dominant-baseline': 'central' }).text(t.name);
+      const $txt   = svgEl('text', { y: 0, 'dominant-baseline': 'central' }).text(optLabel(t));
       const $under = svgEl('line', { 'class': 'under', y1: 9, y2: 9 });
       $g.append($hit, $dot, $txt, $under);
       $a.append($g);                                   // serve nel DOM per misurare il testo
@@ -879,7 +887,7 @@ $(function () {
     m.associations.forEach(a => { kinds[a.id] = 'a'; });
     m.attributes = check(o.attributes, /^t\d+$/, 'attributes')
       .filter(t => kinds[t.owner])
-      .map(t => ({ id: t.id, owner: t.owner, name: str(t.name), pk: !!t.pk, dx: num(t.dx), dy: num(t.dy) }));
+      .map(t => { const r = { id: t.id, owner: t.owner, name: str(t.name), pk: !!t.pk, dx: num(t.dx), dy: num(t.dy) }; if (t.optional === true && !r.pk) r.optional = true; return r; });
     m.links = check(o.links, /^l\d+$/, 'links')
       .filter(l => kinds[l.entity] === 'e' && kinds[l.assoc] === 'a')
       .map(l => ({ id: l.id, entity: l.entity, assoc: l.assoc, many: !!l.many }));
@@ -985,7 +993,7 @@ $(function () {
       const lx = left ? p.x - 12 : p.x + 12;
       grow(left ? p.x - 14 - tw : p.x - 6, p.y - 12, left ? p.x + 6 : p.x + 14 + tw, p.y + 12);
       out.push('<circle cx="' + p.x + '" cy="' + p.y + '" r="5" fill="' + (t.pk ? '#000' : '#fff') + '" ' + line + '/>');
-      out.push(textEl(lx, p.y, t.name, left ? 'end' : 'start'));
+      out.push(textEl(lx, p.y, optLabel(t), left ? 'end' : 'start'));
       if (t.pk) {                                      // identificatore: nome sottolineato
         out.push('<line x1="' + (left ? lx - tw : lx) + '" y1="' + (p.y + 9) + '" x2="' + (left ? lx : lx + tw) + '" y2="' + (p.y + 9) +
                  '" stroke="#000" stroke-width="1.2"' + (weakIds.has(t.owner) ? ' stroke-dasharray="4 3"' : '') + '/>');   // chiave parziale: tratteggio
@@ -1171,6 +1179,9 @@ $(function () {
   // Solo vista: non entra nel modello, nel salvataggio né nella cronologia.
   // L'esportazione SVG/PNG segue ciò che si vede.
   let attrView = 'all';                      // 'all' = tutti, 'pk' = solo identificatori, 'none' = nessuno
+
+  // nome dell'attributo come appare: tra parentesi se facoltativo (convenzione degli esercizi)
+  function optLabel(t) { return t.optional ? '(' + t.name + ')' : t.name; }
 
   function attrVisible(t) { return attrView === 'all' || (attrView === 'pk' && t.pk); }
 
