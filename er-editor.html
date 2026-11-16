@@ -62,6 +62,15 @@
     pointer-events: none; user-select: none;
   }
   .item.sel rect, .item.sel polygon { stroke: var(--accento); stroke-width: 3; }
+  .item .agg-frame { fill: none; stroke: var(--linea); stroke-width: 1.5; pointer-events: none; }
+  .item.sel .agg-frame { stroke: var(--accento); stroke-width: 2.5; }
+  .item .agg-frame.bad { stroke: #b3261e; stroke-width: 2; stroke-dasharray: 6 3; }
+  #aggwarn {
+    position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 50;
+    max-width: 90%; padding: 7px 12px; border: 1px solid #ef4444; border-radius: 6px;
+    background: #fef2f2; color: #8a1c1c; font: 13px/1.35 Helvetica, Arial, sans-serif; pointer-events: none;
+  }
+  #aggwarn[hidden] { display: none; }
   /* identificazione esterna: secondo bordo (entità debole, associazione identificante) e chiave parziale tratteggiata */
   .item .inner { fill: none; pointer-events: none; }
   .item.sel .inner { stroke: var(--accento); stroke-width: 1.5; }
@@ -121,6 +130,7 @@
   <button id="btnRec" type="button">Associazione ricorsiva</button>
   <button id="btnAttr" type="button">Aggiungi attributo</button>
   <button id="btnLink" type="button">Collega</button>
+  <button id="btnAgg" type="button" title="Aggregazione: un’associazione collegata a un’entità o a un’altra associazione">Aggrega</button>
   <span class="sep"></span>
   <button id="btnDelete" type="button">Elimina</button>
   <button id="btnNew" type="button">Nuovo diagramma</button>
@@ -165,6 +175,7 @@
     <g id="layer"></g>
   </svg>
   <input id="rename" type="text" spellcheck="false" autocomplete="off">
+  <div id="aggwarn" hidden></div>
 </div>
 <div id="statusbar"><span id="hint"></span></div>
 
@@ -208,7 +219,7 @@ $(function () {
   // Formato JSON del modello (verrà salvato/caricato nel pezzo 4):
   // { version, entities[], associations[], attributes[], links[] }
   function emptyModel() {
-    return { version: 1, entities: [], associations: [], attributes: [], links: [] };
+    return { version: 1, entities: [], associations: [], attributes: [], links: [], aggregations: [] };
   }
 
   let model    = emptyModel();
@@ -255,6 +266,7 @@ $(function () {
     if (!selected) return;
     if (selected.kind === 'link') {          // eliminazione di un solo collegamento
       model.links = model.links.filter(l => l.id !== selected.id);
+      model.aggregations = model.aggregations.filter(g => g.id !== selected.id);
       selected = null;
       render();
       pushHistory();
@@ -272,6 +284,7 @@ $(function () {
     items.splice(items.findIndex(o => o.id === s.id), 1);
     // a cascata: collegamenti e attributi dell'elemento (arrays vuoti fino ai pezzi 2 e 3)
     model.links      = model.links.filter(l => l.entity !== s.id && l.assoc !== s.id);
+    model.aggregations = model.aggregations.filter(g => g.assoc !== s.id && g.target !== s.id);
     model.attributes = model.attributes.filter(t => t.owner !== s.id);
     delete sizes[s.id];
     selected = null;
@@ -286,6 +299,15 @@ $(function () {
     const el = document.createElementNS(NS, name);
     if (attrs) $(el).attr(attrs);
     return $(el);
+  }
+
+  // margine del rettangolo di aggregazione attorno al rombo
+  const FRAME = 8;
+
+  // bordo di un'associazione: rombo, oppure rettangolo se aggregata
+  function assocEdge(a, s, tx, ty) {
+    if (isAggregated(a)) return clipRect(a, { w: s.w + 2 * FRAME, h: s.h + 2 * FRAME }, tx, ty);
+    return clipDiamond(a, s, tx, ty);
   }
 
   function drawItem(kind, o) {
@@ -313,7 +335,7 @@ $(function () {
       });
     }
     $g.prepend($shape);
-    if (kind === 'entity' ? weakIds.has(o.id) : isIdentifying(o)) {      // entità debole / associazione identificante: doppio bordo
+    if (kind === 'entity' ? weakIds.has(o.id) : isIdentifying(o)) {   // doppio bordo: entità debole o associazione identificante
       let $inner;
       if (kind === 'entity') {
         $inner = svgEl('rect', { 'class': 'inner', x: -w / 2 + 4, y: -h / 2 + 4, width: w - 8, height: h - 8 });
@@ -322,6 +344,9 @@ $(function () {
         $inner = svgEl('polygon', { 'class': 'inner', points: '0,' + (-h / 2 * s) + ' ' + (w / 2 * s) + ',0 0,' + (h / 2 * s) + ' ' + (-w / 2 * s) + ',0' });
       }
       $shape.after($inner);
+    }
+    if (kind !== 'entity' && isAggregated(o)) {          // aggregazione: rettangolo attorno al rombo
+      $shape.after(svgEl('rect', { 'class': 'agg-frame', x: -w / 2 - FRAME, y: -h / 2 - FRAME, width: w + 2 * FRAME, height: h + 2 * FRAME }));
     }
     sizes[o.id] = { w: w, h: h };
   }
@@ -351,6 +376,7 @@ $(function () {
     $('#btnFlip').prop('disabled', !fo || !model.attributes.some(t => t.owner === fo));
     const sa = selected && selected.kind === 'association' ? find('association', selected.id) : null;   // Identificante: solo su una 1:N tra due entità
     $('#btnIdent').prop('disabled', !sa || !identPair(sa)).toggleClass('active', !!sa && isIdentifying(sa));
+    checkAggWarnings();
   }
 
   function select(kind, id) {
@@ -415,7 +441,8 @@ $(function () {
     association: 'Clicca sulla tela per posizionare l\u2019associazione. Esc per annullare.',
     recursive:   'Clicca l\u2019entità su cui creare l\u2019associazione ricorsiva. Esc per annullare.',
     attribute:   'Clicca un\u2019entità o un\u2019associazione per aggiungere un attributo. Esc per uscire.',
-    link:        'Clicca un\u2019entità e un\u2019associazione per collegarle. Esc per uscire.'
+    link:        'Clicca un\u2019entità e un\u2019associazione per collegarle. Esc per uscire.',
+    aggregate:   'Clicca un\u2019associazione da aggregare, poi l\u2019entità o l\u2019associazione collegata. Esc per uscire.'
   };
 
   // schermo tattile: testi senza mouse né tastiera
@@ -435,6 +462,7 @@ $(function () {
     $('#btnRec').toggleClass('active', mode === 'recursive');
     $('#btnAttr').toggleClass('active', mode === 'attribute');
     $('#btnLink').toggleClass('active', mode === 'link');
+    $('#btnAgg').toggleClass('active', mode === 'aggregate');
     $svg.toggleClass('adding', mode === 'entity' || mode === 'association');
     $('#hint').text(HINTS[mode || 'none']);
     markSelected();
@@ -445,6 +473,7 @@ $(function () {
   $('#btnRec').on('click',    function () { setAddMode(addMode === 'recursive' ? null : 'recursive'); });
   $('#btnAttr').on('click',   function () { setAddMode(addMode === 'attribute' ? null : 'attribute'); });
   $('#btnLink').on('click',   function () { setAddMode(addMode === 'link' ? null : 'link'); });
+  $('#btnAgg').on('click',    function () { setAddMode(addMode === 'aggregate' ? null : 'aggregate'); });
   $('#btnDelete').on('click', removeSelected);
 
   $('#btnNew').on('click', function () {
@@ -492,6 +521,12 @@ $(function () {
     if (addMode === 'link') {                // in modalità "Collega" il clic sceglie l'elemento
       endRename(true);
       pickLinkElement($(this).attr('data-kind'), $(this).attr('data-id'));
+      e.preventDefault();
+      return;
+    }
+    if (addMode === 'aggregate') {           // in modalità "Aggrega" il clic sceglie l'associazione e il suo target
+      endRename(true);
+      pickAggElement($(this).attr('data-kind'), $(this).attr('data-id'));
       e.preventDefault();
       return;
     }
@@ -643,7 +678,7 @@ $(function () {
     const cy = (e.y + a.y) / 2 + dx / len * off;
 
     const p0 = clipRect(e, sizes[e.id], cx, cy);        // sul bordo dell'entità
-    const p1 = clipDiamond(a, sizes[a.id], cx, cy);     // sul bordo del rombo
+    const p1 = assocEdge(a, sizes[a.id], cx, cy);       // sul bordo del rombo (o del rettangolo, se aggregata)
     const d = n > 1
       ? 'M' + r1(p0.x) + ',' + r1(p0.y) + ' Q' + r1(cx) + ',' + r1(cy) + ' ' + r1(p1.x) + ',' + r1(p1.y)
       : 'M' + r1(p0.x) + ',' + r1(p0.y) + ' L' + r1(p1.x) + ',' + r1(p1.y);
@@ -664,6 +699,29 @@ $(function () {
     $('#links').append($g);
   }
 
+  // aggregazione: segmento dal bordo del rombo aggregato al bordo del target (entità o associazione)
+  function drawAgg(g, A, T) {
+    const sa = sizes[A.id], st = sizes[T.id];
+    if (!sa || !st) return;
+    const isEnt = !!find('entity', T.id);
+    const pA = assocEdge(A, sa, T.x, T.y);
+    const pT = isEnt ? clipRect(T, st, A.x, A.y) : assocEdge(T, st, A.x, A.y);
+    const d = 'M' + r1(pA.x) + ',' + r1(pA.y) + ' L' + r1(pT.x) + ',' + r1(pT.y);
+    const $g = svgEl('g', { 'class': 'link agg', 'data-id': g.id });
+    $g.append(svgEl('path', { 'class': 'hit', d: d }));
+    $g.append(svgEl('path', { 'class': 'line', d: d }));
+    if (g.many) {                                       // zampa di gallina sul target (lato molti)
+      const ux = pA.x - pT.x, uy = pA.y - pT.y, ul = Math.hypot(ux, uy) || 1;
+      const tx = ux / ul, ty = uy / ul;
+      const fx = pT.x + tx * 18, fy = pT.y + ty * 18;
+      const foot =
+        'M' + r1(fx) + ',' + r1(fy) + ' L' + r1(pT.x - ty * 9) + ',' + r1(pT.y + tx * 9) +
+        ' M' + r1(fx) + ',' + r1(fy) + ' L' + r1(pT.x + ty * 9) + ',' + r1(pT.y - tx * 9);
+      $g.append(svgEl('path', { 'class': 'foot', d: foot }));
+    }
+    $('#links').append($g);
+  }
+
   function drawLinks() {
     $('#links').empty();
     const groups = {};
@@ -676,7 +734,51 @@ $(function () {
       const grp = groups[l.entity + '|' + l.assoc];
       if (e && a) drawLink(l, e, a, grp.indexOf(l), grp.length);
     });
+    model.aggregations.forEach(g => {
+      const A = find('association', g.assoc), T = find('entity', g.target) || find('association', g.target);
+      if (A && T) drawAgg(g, A, T);
+    });
     markSelected();
+  }
+
+  // Un'associazione aggregata deve avere almeno due partecipanti: collegamenti verso entità,
+  // aggregazioni in cui compare come aggregata, aggregazioni in cui compare come target.
+  // Con meno di due il modello logico sarebbe incoerente: si segnala subito.
+  function participantsOf(a) {
+    return model.links.filter(l => l.assoc === a.id).length
+      + model.aggregations.filter(g => g.assoc === a.id).length
+      + model.aggregations.filter(g => g.target === a.id).length;
+  }
+
+  function checkAggWarnings() {
+    const bad = model.associations.filter(a => isAggregated(a) && participantsOf(a) < 2);
+    const ids = new Set(bad.map(a => a.id));
+    $layer.find('.item.association .agg-frame').each(function () {
+      $(this).toggleClass('bad', ids.has($(this).closest('.item').attr('data-id')));
+    });
+    const box = $('#aggwarn')[0];
+    if (!bad.length) { box.hidden = true; return; }
+    box.textContent = 'Attenzione: ' + bad.map(a => '\u00ab' + a.name + '\u00bb').join(', ') +
+      (bad.length > 1 ? ' sono aggregate' : ' \u00e8 aggregata') +
+      ' ma ha meno di due partecipanti: il modello logico sarebbe incoerente. Aggiungi almeno un collegamento.';
+    box.hidden = false;
+  }
+
+  // modalità "Aggrega": primo clic sull'associazione da aggregare, secondo clic sul target (entità o associazione)
+  function pickAggElement(kind, id) {
+    if (!linkFrom) {
+      if (kind !== 'association') { $('#hint').text('Scegli prima un\u2019associazione da aggregare.'); return; }
+      linkFrom = { kind: kind, id: id };
+      $('#hint').text('Ora clicca l\u2019entità o l\u2019associazione collegata.');
+      markSelected();
+      return;
+    }
+    if (linkFrom.id === id) return;
+    model.aggregations.push({ id: newId('g', model.aggregations), assoc: linkFrom.id, target: id, many: false });
+    linkFrom = null;
+    $('#hint').text(HINTS.aggregate);
+    render();
+    pushHistory();
   }
 
   // modalità "Collega": primo clic sceglie un elemento, secondo clic sull'altro tipo crea il collegamento
@@ -791,7 +893,7 @@ $(function () {
       if (p.x === ow.x && p.y === ow.y) return;        // sopra il centro dell'elemento: niente linea
       const b = find('entity', ow.id)
         ? clipRect(ow, sizes[ow.id], p.x, p.y)
-        : clipDiamond(ow, sizes[ow.id], p.x, p.y);
+        : assocEdge(ow, sizes[ow.id], p.x, p.y);
       $l.append(svgEl('line', { 'class': 'aline', x1: r1(b.x), y1: r1(b.y), x2: r1(p.x), y2: r1(p.y) }));
     });
   }
@@ -815,7 +917,7 @@ $(function () {
 
   function selectionExists() {
     if (!selected) return false;
-    if (selected.kind === 'link') return model.links.some(l => l.id === selected.id);
+    if (selected.kind === 'link') return model.links.some(l => l.id === selected.id) || model.aggregations.some(g => g.id === selected.id);
     return !!find(selected.kind, selected.id);
   }
 
@@ -853,7 +955,8 @@ $(function () {
   }
 
   function saveJson() {
-    download('diagramma-er.json', new Blob([JSON.stringify(model, null, 2)], { type: 'application/json' }));
+    const out = Object.assign({}, model, { version: model.aggregations && model.aggregations.length ? 2 : 1 });
+    download('diagramma-er.json', new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' }));
   }
 
   // controlla e ripulisce un file caricato: id nel formato atteso (finiscono nei selettori),
@@ -891,6 +994,10 @@ $(function () {
     m.links = check(o.links, /^l\d+$/, 'links')
       .filter(l => kinds[l.entity] === 'e' && kinds[l.assoc] === 'a')
       .map(l => ({ id: l.id, entity: l.entity, assoc: l.assoc, many: !!l.many }));
+    // aggregazioni: un'associazione (assoc, con doppio bordo) collegata a un'entità o a un'altra associazione (target)
+    m.aggregations = check(o.aggregations, /^g\d+$/, 'aggregations')
+      .filter(g => kinds[g.assoc] === 'a' && (kinds[g.target] === 'e' || kinds[g.target] === 'a') && g.assoc !== g.target)
+      .map(g => ({ id: g.id, assoc: g.assoc, target: g.target, many: !!g.many }));
     return m;
   }
 
@@ -977,10 +1084,14 @@ $(function () {
       grow(a.x - z.w / 2, a.y - z.h / 2, a.x + z.w / 2, a.y + z.h / 2);
       out.push('<polygon points="' + a.x + ',' + (a.y - z.h / 2) + ' ' + (a.x + z.w / 2) + ',' + a.y + ' ' +
                a.x + ',' + (a.y + z.h / 2) + ' ' + (a.x - z.w / 2) + ',' + a.y + '" fill="#fff" ' + line + '/>');
-      if (isIdentifying(a)) {                          // associazione identificante: doppio bordo
+      if (isIdentifying(a)) {                          // doppio bordo: associazione identificante
         const s = innerScale(z.w / 2, z.h / 2);
         out.push('<polygon points="' + a.x + ',' + (a.y - z.h / 2 * s) + ' ' + (a.x + z.w / 2 * s) + ',' + a.y + ' ' +
                  a.x + ',' + (a.y + z.h / 2 * s) + ' ' + (a.x - z.w / 2 * s) + ',' + a.y + '" fill="none" ' + line + '/>');
+      }
+      if (isAggregated(a)) {                           // aggregazione: rettangolo attorno al rombo
+        out.push('<rect x="' + (a.x - z.w / 2 - FRAME) + '" y="' + (a.y - z.h / 2 - FRAME) + '" width="' + (z.w + 2 * FRAME) +
+                 '" height="' + (z.h + 2 * FRAME) + '" fill="none" ' + line + '/>');
       }
       out.push(textEl(a.x, a.y, a.name, 'middle'));
     });
@@ -1288,7 +1399,7 @@ $(function () {
       const t = linkTap;
       linkTap = null;
       if (Math.hypot(e.clientX - t.sx, e.clientY - t.sy) < 8) {
-        const l = model.links.find(x => x.id === t.id);
+        const l = model.links.find(x => x.id === t.id) || model.aggregations.find(x => x.id === t.id);
         if (l) { l.many = !l.many; render(); pushHistory(); }
       }
     }
@@ -1329,6 +1440,9 @@ $(function () {
   }
 
   function isIdentifying(a) { return a.identifying === true && !!identPair(a); }
+
+  // un'associazione è aggregata se compare come 'assoc' in una aggregazione
+  function isAggregated(a) { return model.aggregations.some(g => g.assoc === a.id); }
 
   function weakSet() {
     const set = new Set();
