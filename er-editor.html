@@ -88,6 +88,9 @@
   .link .hit { fill: none; stroke: transparent; stroke-width: 14; pointer-events: stroke; cursor: pointer; vector-effect: non-scaling-stroke; }
   .link .line, .link .foot { fill: none; stroke: var(--linea); stroke-width: 1.5; stroke-linecap: round; pointer-events: none; }
   .link.sel .line, .link.sel .foot { stroke: var(--accento); stroke-width: 3; }
+  .gen .tri { fill: #fff; stroke: var(--linea); stroke-width: 1.5; cursor: pointer; }
+  .link.sel .tri { stroke: var(--accento); stroke-width: 3; }
+  .genlabel { font: 12px Helvetica, Arial, sans-serif; fill: var(--linea); text-anchor: middle; pointer-events: none; }
   .item.pending rect, .item.pending polygon { stroke: var(--accento); stroke-width: 3; stroke-dasharray: 6 4; }
 
   /* attributi */
@@ -131,6 +134,7 @@
   <button id="btnAttr" type="button">Aggiungi attributo</button>
   <button id="btnLink" type="button">Collega</button>
   <button id="btnAgg" type="button" title="Aggregazione: un’associazione collegata a un’entità o a un’altra associazione">Aggrega</button>
+  <button id="btnGen" type="button" title="Generalizzazione: clicca l’entità padre, poi una o più entità figlie">Generalizza</button>
   <span class="sep"></span>
   <button id="btnDelete" type="button">Elimina</button>
   <button id="btnNew" type="button">Nuovo diagramma</button>
@@ -218,8 +222,9 @@ $(function () {
 
   // Formato JSON del modello (verrà salvato/caricato nel pezzo 4):
   // { version, entities[], associations[], attributes[], links[] }
+  const COVERS = ['pe', 'po', 'te', 'to'];     // copertura delle generalizzazioni: p/t = parziale/totale, e/o = esclusiva/sovrapposta
   function emptyModel() {
-    return { version: 1, entities: [], associations: [], attributes: [], links: [], aggregations: [] };
+    return { version: 1, entities: [], associations: [], attributes: [], links: [], aggregations: [], generalizations: [] };
   }
 
   let model    = emptyModel();
@@ -267,6 +272,9 @@ $(function () {
     if (selected.kind === 'link') {          // eliminazione di un solo collegamento
       model.links = model.links.filter(l => l.id !== selected.id);
       model.aggregations = model.aggregations.filter(g => g.id !== selected.id);
+      const gp = selected.id.split(':');         // 's1' = intera generalizzazione, 's1:e2' = un solo figlio
+      model.generalizations.forEach(g => { if (g.id === gp[0] && gp[1]) g.children = g.children.filter(c => c !== gp[1]); });
+      model.generalizations = model.generalizations.filter(g => (gp[1] || g.id !== gp[0]) && g.children.length);
       selected = null;
       render();
       pushHistory();
@@ -285,6 +293,8 @@ $(function () {
     // a cascata: collegamenti e attributi dell'elemento (arrays vuoti fino ai pezzi 2 e 3)
     model.links      = model.links.filter(l => l.entity !== s.id && l.assoc !== s.id);
     model.aggregations = model.aggregations.filter(g => g.assoc !== s.id && g.target !== s.id);
+    model.generalizations.forEach(g => { g.children = g.children.filter(c => c !== s.id); });
+    model.generalizations = model.generalizations.filter(g => g.parent !== s.id && g.children.length);
     model.attributes = model.attributes.filter(t => t.owner !== s.id);
     delete sizes[s.id];
     selected = null;
@@ -442,7 +452,8 @@ $(function () {
     recursive:   'Clicca l\u2019entità su cui creare l\u2019associazione ricorsiva. Esc per annullare.',
     attribute:   'Clicca un\u2019entità o un\u2019associazione per aggiungere un attributo. Esc per uscire.',
     link:        'Clicca un\u2019entità e un\u2019associazione per collegarle. Esc per uscire.',
-    aggregate:   'Clicca un\u2019associazione da aggregare, poi l\u2019entità o l\u2019associazione collegata. Esc per uscire.'
+    aggregate:   'Clicca un\u2019associazione da aggregare, poi l\u2019entità o l\u2019associazione collegata. Esc per uscire.',
+    gen:         'Clicca l\u2019entit\u00e0 padre, poi una o pi\u00f9 entit\u00e0 figlie. Clic sul triangolo: cambia copertura (p/t, e/o). Canc per eliminare.'
   };
 
   // schermo tattile: testi senza mouse né tastiera
@@ -463,6 +474,7 @@ $(function () {
     $('#btnAttr').toggleClass('active', mode === 'attribute');
     $('#btnLink').toggleClass('active', mode === 'link');
     $('#btnAgg').toggleClass('active', mode === 'aggregate');
+    $('#btnGen').toggleClass('active', mode === 'gen');
     $svg.toggleClass('adding', mode === 'entity' || mode === 'association');
     $('#hint').text(HINTS[mode || 'none']);
     markSelected();
@@ -474,6 +486,7 @@ $(function () {
   $('#btnAttr').on('click',   function () { setAddMode(addMode === 'attribute' ? null : 'attribute'); });
   $('#btnLink').on('click',   function () { setAddMode(addMode === 'link' ? null : 'link'); });
   $('#btnAgg').on('click',    function () { setAddMode(addMode === 'aggregate' ? null : 'aggregate'); });
+  $('#btnGen').on('click',    function () { setAddMode(addMode === 'gen' ? null : 'gen'); });
   $('#btnDelete').on('click', removeSelected);
 
   $('#btnNew').on('click', function () {
@@ -527,6 +540,12 @@ $(function () {
     if (addMode === 'aggregate') {           // in modalità "Aggrega" il clic sceglie l'associazione e il suo target
       endRename(true);
       pickAggElement($(this).attr('data-kind'), $(this).attr('data-id'));
+      e.preventDefault();
+      return;
+    }
+    if (addMode === 'gen') {                 // in modalità "Generalizza" il primo clic è il padre, i successivi i figli
+      endRename(true);
+      pickGenElement($(this).attr('data-kind'), $(this).attr('data-id'));
       e.preventDefault();
       return;
     }
@@ -722,6 +741,37 @@ $(function () {
     $('#links').append($g);
   }
 
+  // generalizzazione: triangolo (vertice verso il padre) con una linea per ciascun figlio
+  function drawGens() {
+    model.generalizations.forEach(g => {
+      const P = find('entity', g.parent), sp = P && sizes[g.parent];
+      const kids = g.children.map(id => find('entity', id)).filter(c => c && sizes[c.id]);
+      if (!sp || !kids.length) return;
+      const mx = kids.reduce((a, c) => a + c.x, 0) / kids.length, my = kids.reduce((a, c) => a + c.y, 0) / kids.length;
+      let ux = mx - P.x, uy = my - P.y;
+      const len = Math.hypot(ux, uy);
+      if (len < 1) { ux = 0; uy = 1; } else { ux /= len; uy /= len; }
+      const tx = P.x + ux * len / 2, ty = P.y + uy * len / 2, px = -uy, py = ux;
+      const ax = tx - ux * 12, ay = ty - uy * 12, bx = tx + ux * 10, by = ty + uy * 10;
+      const p0 = clipRect(P, sp, ax, ay);
+      const d0 = 'M' + r1(p0.x) + ',' + r1(p0.y) + ' L' + r1(ax) + ',' + r1(ay);
+      const $g = svgEl('g', { 'class': 'link gen', 'data-id': g.id });
+      $g.append(svgEl('path', { 'class': 'hit', d: d0 }));
+      $g.append(svgEl('path', { 'class': 'line', d: d0 }));
+      $g.append(svgEl('polygon', { 'class': 'tri', points: r1(ax) + ',' + r1(ay) + ' ' + r1(bx + px * 14) + ',' + r1(by + py * 14) + ' ' + r1(bx - px * 14) + ',' + r1(by - py * 14) }));
+      $g.append(svgEl('text', { 'class': 'genlabel', x: r1(tx + px * 30), y: r1(ty + py * 30 + 4) }).text('(' + g.cover[0] + ',' + g.cover[1] + ')'));
+      $('#links').append($g);
+      kids.forEach(c => {
+        const pc = clipRect(c, sizes[c.id], bx, by);
+        const d = 'M' + r1(bx) + ',' + r1(by) + ' L' + r1(pc.x) + ',' + r1(pc.y);
+        const $k = svgEl('g', { 'class': 'link gen', 'data-id': g.id + ':' + c.id });
+        $k.append(svgEl('path', { 'class': 'hit', d: d }));
+        $k.append(svgEl('path', { 'class': 'line', d: d }));
+        $('#links').append($k);
+      });
+    });
+  }
+
   function drawLinks() {
     $('#links').empty();
     const groups = {};
@@ -738,6 +788,7 @@ $(function () {
       const A = find('association', g.assoc), T = find('entity', g.target) || find('association', g.target);
       if (A && T) drawAgg(g, A, T);
     });
+    drawGens();
     markSelected();
   }
 
@@ -762,6 +813,17 @@ $(function () {
       (bad.length > 1 ? ' sono aggregate' : ' \u00e8 aggregata') +
       ' ma ha meno di due partecipanti: il modello logico sarebbe incoerente. Aggiungi almeno un collegamento.';
     box.hidden = false;
+  }
+
+  function pickGenElement(kind, id) {
+    if (kind !== 'entity') { $('#hint').text('Scegli un\u2019entit\u00e0.'); return; }
+    if (!linkFrom) { linkFrom = { kind: kind, id: id }; $('#hint').text('Ora clicca le entit\u00e0 figlie (altre dopo la prima). Esc per uscire.'); markSelected(); return; }
+    if (linkFrom.id === id) return;
+    let g = model.generalizations.find(x => x.parent === linkFrom.id);
+    if (!g) { g = { id: newId('s', model.generalizations), parent: linkFrom.id, children: [], cover: 'pe' }; model.generalizations.push(g); }
+    if (g.children.indexOf(id) === -1) g.children.push(id);
+    render();
+    pushHistory();
   }
 
   // modalità "Aggrega": primo clic sull'associazione da aggregare, secondo clic sul target (entità o associazione)
@@ -917,7 +979,8 @@ $(function () {
 
   function selectionExists() {
     if (!selected) return false;
-    if (selected.kind === 'link') return model.links.some(l => l.id === selected.id) || model.aggregations.some(g => g.id === selected.id);
+    if (selected.kind === 'link') return model.links.some(l => l.id === selected.id) || model.aggregations.some(g => g.id === selected.id) ||
+      model.generalizations.some(g => g.id === selected.id || g.children.some(c => g.id + ':' + c === selected.id));
     return !!find(selected.kind, selected.id);
   }
 
@@ -955,7 +1018,7 @@ $(function () {
   }
 
   function saveJson() {
-    const out = Object.assign({}, model, { version: model.aggregations && model.aggregations.length ? 2 : 1 });
+    const out = Object.assign({}, model, { version: (model.aggregations && model.aggregations.length) || (model.generalizations && model.generalizations.length) ? 2 : 1 });
     download('diagramma-er.json', new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' }));
   }
 
@@ -998,6 +1061,12 @@ $(function () {
     m.aggregations = check(o.aggregations, /^g\d+$/, 'aggregations')
       .filter(g => kinds[g.assoc] === 'a' && (kinds[g.target] === 'e' || kinds[g.target] === 'a') && g.assoc !== g.target)
       .map(g => ({ id: g.id, assoc: g.assoc, target: g.target, many: !!g.many }));
+    // generalizzazioni: un'entità padre, uno o più figli, copertura (p/t = parziale/totale, e/o = esclusiva/sovrapposta)
+    m.generalizations = check(o.generalizations, /^s\d+$/, 'generalizations')
+      .filter(g => kinds[g.parent] === 'e' && Array.isArray(g.children))
+      .map(g => ({ id: g.id, parent: g.parent, cover: COVERS.indexOf(g.cover) !== -1 ? g.cover : 'pe',
+                   children: g.children.filter((c, i, a) => kinds[c] === 'e' && c !== g.parent && a.indexOf(c) === i) }))
+      .filter(g => g.children.length);
     return m;
   }
 
@@ -1061,6 +1130,17 @@ $(function () {
         grow(bb.x, bb.y, bb.x + bb.width, bb.y + bb.height);
         out.push('<path d="' + $p.attr('d') + '" fill="none" ' + line + ' stroke-linecap="round"/>');
       });
+    });
+
+    $('#links .gen .tri').each(function () {         // generalizzazione: triangolo ed etichetta
+      const bb = this.getBBox();
+      grow(bb.x, bb.y, bb.x + bb.width, bb.y + bb.height);
+      out.push('<polygon points="' + $(this).attr('points') + '" fill="#fff" ' + line + '/>');
+    });
+    $('#links .gen .genlabel').each(function () {
+      const x = +$(this).attr('x'), y = +$(this).attr('y') - 4;
+      grow(x - 20, y - 10, x + 20, y + 10);
+      out.push(textEl(x, y, $(this).text(), 'middle'));
     });
 
     $('#attrlines .aline').each(function () {
@@ -1399,8 +1479,10 @@ $(function () {
       const t = linkTap;
       linkTap = null;
       if (Math.hypot(e.clientX - t.sx, e.clientY - t.sy) < 8) {
+        const gg = model.generalizations.find(x => x.id === t.id);
         const l = model.links.find(x => x.id === t.id) || model.aggregations.find(x => x.id === t.id);
-        if (l) { l.many = !l.many; render(); pushHistory(); }
+        if (gg) { gg.cover = COVERS[(COVERS.indexOf(gg.cover) + 1) % COVERS.length]; render(); pushHistory(); }
+        else if (l) { l.many = !l.many; render(); pushHistory(); }
       }
     }
     if (e.pointerType === 'touch' && tap && addMode === null && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) < 10) {

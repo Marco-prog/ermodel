@@ -245,6 +245,13 @@
       if (e && typeof e.id === 'string') ents[e.id] = newTable(e.name, 'entity', 'L\u2019entità');
     });
 
+    const genPairs = [];                                   // generalizzazioni: coppie padre -> figlio
+    (data.generalizations || []).forEach(g => {
+      (g && Array.isArray(g.children) ? g.children : []).forEach(ch => {
+        if (ents[g.parent] && ents[ch] && ch !== g.parent) genPairs.push({ p: g.parent, c: ch });
+      });
+    });
+    const genChild = new Set(genPairs.map(x => x.c));
     const assocs = Object.create(null);
     (data.associations || []).forEach(a => {
       if (a && typeof a.id === 'string') assocs[a.id] = { name: a.name, links: [], attrs: [], identifying: a.identifying === true };
@@ -266,7 +273,7 @@
       const t = ents[id];
       const pks = t.cols.filter(c => c.pk);
       if (pks.length === 1 && pks[0].type === 'INT' && isIdName(pks[0].name)) pks[0].auto = true;
-      if (!pks.length) warn('L\u2019entità «' + t.name + '» non ha un identificatore: nessuna chiave primaria e nessuna FK potrà puntare a lei.');
+      if (!pks.length && !genChild.has(id)) warn('L\u2019entità «' + t.name + '» non ha un identificatore: nessuna chiave primaria e nessuna FK potrà puntare a lei.');
     });
 
     (data.links || []).forEach(l => {
@@ -314,6 +321,7 @@
     // tabella di associazione (N:M, o associazione tra tre o più entità)
     function bridge(a) {
       const bt = newTable(a.name, 'assoc', 'L\u2019associazione');
+      a.table = bt;                                                           // serve alle aggregazioni
       const count = {}, seen = {}, parts = [];
       a.links.forEach(l => { count[l.ent.name] = (count[l.ent.name] || 0) + 1; });
       a.links.forEach(l => {
@@ -388,6 +396,27 @@
       }
     }
 
+    // Generalizzazione: una tabella per ogni entità. La chiave del figlio è quella del padre (PK e FK insieme);
+    // un eventuale identificatore proprio del figlio resta come colonna UNIQUE. I padri si traducono prima dei figli.
+    const gpend = genPairs.slice();
+    while (gpend.length) {
+      let rdy = gpend.filter(x => !gpend.some(y => y !== x && y.c === x.p));
+      if (!rdy.length) { warn('Generalizzazioni circolari: le chiavi potrebbero risultare incomplete.'); rdy = [gpend[0]]; }
+      rdy.forEach(x => {
+        const P = ents[x.p], C = ents[x.c];
+        if (!P.cols.some(col => col.pk)) {
+          warn('Generalizzazione: il padre \u00ab' + P.name + '\u00bb non ha un identificatore, il figlio \u00ab' + C.name + '\u00bb non \u00e8 collegato.');
+        } else {
+          const own = C.cols.filter(col => col.pk);
+          own.forEach(col => { col.pk = false; col.auto = false; col.unique = true; });
+          addFk(C, P, 'isa', { asPk: true, ident: true });
+          warn('Generalizzazione \u00ab' + C.name + '\u00bb \u2282 \u00ab' + P.name + '\u00bb: la chiave primaria di \u00ab' + C.name + '\u00bb \u00e8 la FK verso \u00ab' + P.name + '\u00bb' +
+               (own.length ? '; ' + own.map(col => col.name).join(', ') + ' resta una colonna UNIQUE.' : '.'));
+        }
+        gpend.splice(gpend.indexOf(x), 1);
+      });
+    }
+
     // Le associazioni identificanti vengono tradotte per prime, partendo dai proprietari: la chiave di una debole include
     // quella del proprietario, che deve essere già completa (il proprietario può essere a sua volta debole).
     const allAssocs = Object.keys(assocs).map(id => assocs[id]);
@@ -403,6 +432,18 @@
       ready.forEach(a => { translateAssoc(a); pending.splice(pending.indexOf(a), 1); });
     }
     allAssocs.filter(a => !isIdent(a)).forEach(translateAssoc);
+
+    // Aggregazione: l'associazione aggregata (con una tabella propria) si comporta come un'entità; l'entità collegata
+    // riceve una FK verso quella tabella (UNIQUE se per ogni istanza dell'associazione ne esiste al massimo una).
+    (data.aggregations || []).forEach(g => {
+      const A = g && assocs[g.assoc], T = g && ents[g.target];
+      if (!A) return;
+      if (!T) { warn('Aggregazione di \u00ab' + A.name + '\u00bb collegata a un\u2019associazione: non tradotta.'); return; }
+      if (!A.table) { warn('Aggregazione di \u00ab' + A.name + '\u00bb: l\u2019associazione non genera una tabella (non \u00e8 N:M), non tradotta.'); return; }
+      const many = g.many === true || g.many === 'true';
+      addFk(T, A.table, A.name, { unique: !many });
+      warn('Aggregazione \u00ab' + A.name + '\u00bb: FK in \u00ab' + T.name + '\u00bb verso la tabella \u00ab' + A.table.name + '\u00bb' + (many ? '.' : ' (UNIQUE, 1:1).'));
+    });
 
     return { tables: tables, warnings: warnings };
   }
@@ -457,6 +498,7 @@
       const lines = cols.map(c => '    ' + c.name + ' ' + c.type + (c.optional && !c.pk ? '' : ' NOT NULL') + (c.auto ? ' AUTO_INCREMENT' : ''));
       const pk = cols.filter(c => c.pk).map(c => c.name);
       if (pk.length) lines.push('    PRIMARY KEY (' + pk.join(', ') + ')');
+      cols.filter(col => col.unique && !col.fk).forEach(col => lines.push('    UNIQUE (' + col.name + ')'));
       t.fks.filter(f => f.unique).forEach(f => lines.push('    UNIQUE (' + f.cols.join(', ') + ')'));
       o.inline.forEach(f => lines.push('    ' + fkSql(f)));
       sql += 'CREATE TABLE ' + t.name + ' (\n' + lines.join(',\n') + '\n);\n\n';
@@ -558,7 +600,7 @@
                     : (kind === 'pk' ? ' font-weight="700" fill="#172b4d"' : ' font-weight="500" fill="#172b4d"');
         body += '<text x="' + (x + 12) + '" y="' + mid + '" font-size="13"' + style + ' dominant-baseline="middle">' + esc(col.optional ? '(' + col.name + ')' : col.name) + '</text>';
         body += '<text x="' + (x + w - 140) + '" y="' + mid + '" font-size="11" fill="#64748b" dominant-baseline="middle">' + esc(col.type) + '</text>';
-        const badge = col.pk && col.fk ? 'PK \u00b7 FK' : (col.pk ? 'PK' : (col.fk ? (col.unique ? 'FK \u00b7 UQ' : 'FK') : ''));
+        const badge = col.pk && col.fk ? 'PK \u00b7 FK' : (col.pk ? 'PK' : (col.fk ? (col.unique ? 'FK \u00b7 UQ' : 'FK') : (col.unique ? 'UQ' : '')));
         if (badge) {
           body += '<text x="' + (x + w - 10) + '" y="' + mid + '" font-size="10" font-weight="700" text-anchor="end" fill="' +
                   (col.pk ? '#805b00' : '#17603a') + '" dominant-baseline="middle">' + badge + '</text>';
